@@ -1,0 +1,43 @@
+buildscript {
+    ext.kotlin_version = '1.9.10'
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        // Firebase and Google Services Configuration
+        classpath 'com.google.gms:google-services:4.4.2'
+        
+        // Android Gradle Plugin Version (Updated)
+        classpath 'com.android.tools.build:gradle:8.1.1'
+        
+        // Kotlin Gradle Plugin
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// Set common build directory
+rootProject.buildDir = '../build'
+
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+
+// Ensure app module builds before other modules
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+// Task to clean build directory
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

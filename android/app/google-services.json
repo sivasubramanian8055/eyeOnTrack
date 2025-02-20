@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "742173059472",
+    "project_id": "navigate-ff149",
+    "storage_bucket": "navigate-ff149.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:742173059472:android:985c4e3044715f21f6ab15",
+        "android_client_info": {
+          "package_name": "com.lgt.your.locator"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCe3Pa4Q-lB1LKRwK84S9vPN487D4tp8uk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
