@@ -89,23 +89,19 @@ class _PlaceSearchFieldViewState extends State<PlaceSearchFieldView> {
             Expanded(
               child: TextFormField(
                 autofocus: false,
-                readOnly: widget.readOnly??false,
+                readOnly: widget.readOnly ?? false,
                 decoration: widget.inputDecoration,
                 style: widget.textStyle,
                 controller: widget.textEditingController,
                 focusNode: widget.focusNode ?? FocusNode(),
-
                 onChanged: (string) {
                   widget.onChanged(string);
-                  print("fdskjhfkdshfkdsfdsgdg");
                   subject.add(string);
                   if (widget.isCrossBtnShown) {
                     setState(() {
                       isCrossBtn = string.isNotEmpty;
-                      
                     });
                   }
-                        
                 },
               ),
             ),
@@ -264,7 +260,7 @@ class _PlaceSearchFieldViewState extends State<PlaceSearchFieldView> {
   }
 
   void clearData() {
-        widget.clearData.call(); // Call the passed clearData function if not null
+    widget.clearData.call(); // Call the passed clearData function if not null
     widget.textEditingController.clear();
     _cancelToken?.cancel();
     setState(() {
@@ -272,8 +268,6 @@ class _PlaceSearchFieldViewState extends State<PlaceSearchFieldView> {
       isCrossBtn = false;
     });
     _overlayEntry?.remove();
-
-
   }
 
   bool _showCrossIconWidget() {
@@ -294,8 +288,3 @@ class _PlaceSearchFieldViewState extends State<PlaceSearchFieldView> {
 
 typedef GetPlaceDetailsWithLatLng = void Function(
     Prediction postalCodeResponse);
-
-
-
-
-

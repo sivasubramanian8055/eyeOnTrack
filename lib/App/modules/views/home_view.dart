@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:crypoexchange/App/helper/camera_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'package:get/get.dart';
@@ -12,30 +13,29 @@ import '../../helper/completed_ui.dart';
 import '../../helper/place_search_field.dart';
 import '../../helper/profile_dialog.dart';
 import '../controllers/home_controller.dart';
+import 'camera_preview_draggable.dart';
+import '../../helper/camera_helper.dart';
 
 class HomeView extends GetView<HomeController> {
   const HomeView({super.key});
 
   @override
   Widget build(BuildContext context) {
-
     controller.checkStateDragged();
     return WillPopScope(
-      onWillPop: () {
+      onWillPop: () async {
         exit(0);
       },
       child: Obx(
         () => controller.appController.currentPosition.value == null
-            ? const Center(
-                child: CircularProgressIndicator(),
-              )
+            ? const Center(child: CircularProgressIndicator())
             : Scaffold(
-               resizeToAvoidBottomInset:false,
+                resizeToAvoidBottomInset: false,
                 key: controller.scaffoldKey,
                 backgroundColor: Colors.transparent,
-                //  appBar: TopAppbar(context),
                 body: Stack(
                   children: [
+                    // Google Map as background.
                     Positioned.fill(
                       child: GoogleMap(
                         compassEnabled: false,
@@ -44,51 +44,45 @@ class HomeView extends GetView<HomeController> {
                         myLocationEnabled: true,
                         myLocationButtonEnabled: false,
                         indoorViewEnabled: true,
-                        // polylines: controller.ployLines,
                         polylines: Set<Polyline>.of(controller.ployLines),
                         initialCameraPosition: CameraPosition(
-
-                            // uy
-
-                            target: /*const LatLng(44.638104, -63.585499),*/
-                                LatLng(
-                                    controller.appController.currentPosition
-                                            .value?.latitude ??
-                                        0.0,
-                                    controller.appController.currentPosition
-                                            .value?.longitude ??
-                                        0.0),
-
-                            //  target: const LatLng(28.6274104,77.3738308),
-                            bearing: controller.appController.normalBearing,
-                            tilt: controller.appController.normalTilt,
-                            zoom: controller.appController.normalZoom),
+                          target: LatLng(
+                            controller.appController.currentPosition.value
+                                    ?.latitude ??
+                                0.0,
+                            controller.appController.currentPosition.value
+                                    ?.longitude ??
+                                0.0,
+                          ),
+                          bearing: controller.appController.normalBearing,
+                          tilt: controller.appController.normalTilt,
+                          zoom: controller.appController.normalZoom,
+                        ),
                         markers: controller.markers.values.toSet(),
                         onMapCreated: (GoogleMapController mController) {
                           controller.mapController.complete(mController);
-                          controller.mapController.future.then((value) =>
-                              controller.googleMapController = value);
+                          controller.mapController.future.then(
+                            (value) => controller.googleMapController = value,
+                          );
                         },
                         onCameraMove: (position) {
                           controller.currentZoomLevel.value = position.zoom;
-                          if (controller.mTravelZoom.value != position.zoom) {
-                            controller.zoomLevelChanges.value = true;
-                          } else {
-                            controller.zoomLevelChanges.value = false;
-                          }
-                          // print("dsksfhkjsdfhjksdf${position}");
+                          controller.zoomLevelChanges.value =
+                              controller.mTravelZoom.value != position.zoom;
                         },
                       ),
                     ),
-                    if(!controller.isJourneyStarted.value)
-                    Positioned(
-                      top: 5.0,
-                      left: 0.0,
-                      right: 0.0,
-                      child: topMenu(context),
-                    ),
+                    // Top menu.
+                    if (!controller.isJourneyStarted.value)
+                      Positioned(
+                        top: 5.0,
+                        left: 0.0,
+                        right: 0.0,
+                        child: topMenu(context),
+                      ),
+                    // Bottom slider UI.
                     if (controller.isMapInitialized.value) _bottomSliderUI(),
-
+                    // Other Floating Buttons.
                     if (!controller.isMapInitialized.value)
                       Positioned(
                         right: 10,
@@ -96,37 +90,44 @@ class HomeView extends GetView<HomeController> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-
                             FloatingActionButton(
                               heroTag: 'Profile',
                               onPressed: () =>
                                   Get.dialog(const ProfileDialog()),
                               backgroundColor: Colors.white,
-                              child: Icon(Icons.person, color: Colors.blue),
+                              child:
+                                  const Icon(Icons.person, color: Colors.blue),
                             ),
-
                             const SizedBox(height: 10),
                             FloatingActionButton(
                               heroTag: 'current',
                               onPressed: () => controller.recenterCamera(),
-                              child: Icon(Icons.location_searching,
-                                  color: Colors.blue),
+                              child: const Icon(
+                                Icons.location_searching,
+                                color: Colors.blue,
+                              ),
                               backgroundColor: Colors.white,
                             ),
                             const SizedBox(height: 10),
-                            // floatingActionsForHazard(context),
                           ],
                         ),
                       ),
                     const Positioned(
-                        top: 100, left: 2.0, right: 2.0, child: CompletedUI())
+                      top: 100,
+                      left: 2.0,
+                      right: 2.0,
+                      child: CompletedUI(),
+                    ),
+                    // Draggable camera preview overlay (using our newly created widget).
+                    if (controller.isCameraActive.value)
+                      CameraPreviewDraggable(controller: controller),
                   ],
                 ),
-                // floatingActionButton: floatingActions(context),
               ),
       ),
     );
   }
+
   topMenu(BuildContext context) => SafeArea(
         child: Container(
           margin: const EdgeInsets.all(10),
@@ -189,16 +190,13 @@ class HomeView extends GetView<HomeController> {
                         // countries: [ "in"],
                         isLatLngRequired: true,
                         getPlaceDetailWithLatLng: (Prediction prediction) {
-
-
                           controller.pickUpLatLng.value = LatLng(
                               double.parse(prediction.lat ?? '0.0'),
                               double.parse(prediction.lng ?? '0.0'));
                           print("PICKUP_PLACE_CLICKED_DATA=>" +
                               controller.pickUpLatLng.value!.latitude
                                   .toString());
-        controller.closeKeyboard();
-
+                          controller.closeKeyboard();
                         },
                         itemClick: (Prediction prediction) {
                           controller.pickupController.text =
@@ -206,7 +204,6 @@ class HomeView extends GetView<HomeController> {
                           controller.pickupController.selection =
                               TextSelection.fromPosition(TextPosition(
                                   offset: prediction.description?.length ?? 0));
-
                         },
                         onChanged: (String value) {
                           if (value.toString() == '') {
@@ -395,17 +392,16 @@ class HomeView extends GetView<HomeController> {
                     child: FloatingActionButton(
                       heroTag: 'current',
                       onPressed: () {
-
                         controller.recenterCamera();
-                        },
+                      },
                       backgroundColor: Colors.white,
                       child: const Icon(Icons.location_searching,
                           color: Colors.blue),
                     ),
                   ),
                   const SizedBox(height: 10),
-                 // This is adding hazard point button
-             /*     Container(
+                  // This is adding hazard point button
+                  /*     Container(
                     margin: const EdgeInsets.all(10),
                     child: floatingActionsForHazard(context),
                   ),
@@ -452,8 +448,6 @@ class HomeView extends GetView<HomeController> {
                                       fontSize: 16,
                                       fontWeight: FontWeight.w500),
                                 ),
-
-
                                 Row(
                                   children: [
                                     if (controller.pickUpLatLng.value == null)
@@ -569,7 +563,6 @@ class HomeView extends GetView<HomeController> {
                                     ),
                                   ],
                                 )
-
                               ],
                             ),
                             const SizedBox(
@@ -624,7 +617,13 @@ class HomeView extends GetView<HomeController> {
                                 Expanded(
                                     child: InkWell(
                                   borderRadius: BorderRadius.circular(5),
-                                  onTap: () => controller.onSeletctGoTo(1),
+                                  onTap: () {
+                                    controller.onSeletctGoTo(1);
+                                    if (Platform.isAndroid) {
+                                      CameraHelper.showAwarenessDialog(
+                                          context, controller);
+                                    }
+                                  },
                                   child: Column(
                                     children: [
                                       Row(
@@ -670,59 +669,58 @@ class HomeView extends GetView<HomeController> {
                               height: 10,
                             ),
                             //LiveDistenceTimeData.value
-                            Obx(
-                              () => Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-
-                                  if(controller.isJourneyStarted.value&&controller.LiveDistenceTimeData.value!=null)
-                                Row(
-                                children: [
-                                  myText(
-                                title:
-                                 "${controller.LiveDistenceTimeData.value['duration']['text']}" /*'${controller.walkingTime.value}'*/,
-                                color: Colors.amber,
-                                fontWeight: FontWeight.w500,
-                                fontSize: 18),
-                                   const SizedBox(width: 5),
-                                 myText(
-                                title:
-                                '(${controller.LiveDistenceTimeData.value['distance']['text']})',
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black),
-                          ],
-                        )
-                                  else
-                                  controller.selectedPolylineInfo.value.isEmpty
-                                      ? Align(
-                                      alignment: Alignment.topLeft,
-                                      child: myText(
-                                          title: 'Loading...',
-                                          color: Colors.amber,
-                                          fontWeight: FontWeight.w500,
-                                          fontSize: 18))
-                                      : Row(
-                                    children: [
-                                      myText(
-                                          title:
-                                          "${controller.selectedPolylineInfo.value['Time']}" /*'${controller.walkingTime.value}'*/,
-                                          color: Colors.amber,
-                                          fontWeight: FontWeight.w500,
-                                          fontSize: 18),
-                                      const SizedBox(width: 5),
-
-                                      myText(
-                                          title:
-                                          '(${controller.selectedPolylineInfo.value['Distance']})',
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: Colors.black),
-                                    ],
-                                  ),
-                                ],
-                              )
-                            ),
+                            Obx(() => Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (controller.isJourneyStarted.value &&
+                                        controller.LiveDistenceTimeData.value !=
+                                            null)
+                                      Row(
+                                        children: [
+                                          myText(
+                                              title:
+                                                  "${controller.LiveDistenceTimeData.value['duration']['text']}" /*'${controller.walkingTime.value}'*/,
+                                              color: Colors.amber,
+                                              fontWeight: FontWeight.w500,
+                                              fontSize: 18),
+                                          const SizedBox(width: 5),
+                                          myText(
+                                              title:
+                                                  '(${controller.LiveDistenceTimeData.value['distance']['text']})',
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: Colors.black),
+                                        ],
+                                      )
+                                    else
+                                      controller.selectedPolylineInfo.value
+                                              .isEmpty
+                                          ? Align(
+                                              alignment: Alignment.topLeft,
+                                              child: myText(
+                                                  title: 'Loading...',
+                                                  color: Colors.amber,
+                                                  fontWeight: FontWeight.w500,
+                                                  fontSize: 18))
+                                          : Row(
+                                              children: [
+                                                myText(
+                                                    title:
+                                                        "${controller.selectedPolylineInfo.value['Time']}" /*'${controller.walkingTime.value}'*/,
+                                                    color: Colors.amber,
+                                                    fontWeight: FontWeight.w500,
+                                                    fontSize: 18),
+                                                const SizedBox(width: 5),
+                                                myText(
+                                                    title:
+                                                        '(${controller.selectedPolylineInfo.value['Distance']})',
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: Colors.black),
+                                              ],
+                                            ),
+                                  ],
+                                )),
 
                             Expanded(
                               child: SingleChildScrollView(
@@ -733,32 +731,44 @@ class HomeView extends GetView<HomeController> {
                                 child: Column(
                                   children: [
                                     Obx(() {
-                                      if (controller.selectedPolylineInfo['Instructions'] != null) {
-                                        List InsTRUC = controller.selectedPolylineInfo.value['Instructions'];
+                                      if (controller.selectedPolylineInfo[
+                                              'Instructions'] !=
+                                          null) {
+                                        List InsTRUC = controller
+                                            .selectedPolylineInfo
+                                            .value['Instructions'];
                                         List steps = InsTRUC.first['steps'];
-                                        int currentInstructionIndex = controller.isCurrentInstructionIndex.value;
+                                        int currentInstructionIndex = controller
+                                            .isCurrentInstructionIndex.value;
 
                                         return Column(children: [
-                                          myText(title: controller.isSelectedPolyLineIndex.value.toString(), fontSize: 1),
+                                          myText(
+                                              title: controller
+                                                  .isSelectedPolyLineIndex.value
+                                                  .toString(),
+                                              fontSize: 1),
                                           ListView.builder(
                                               padding: EdgeInsets.zero,
                                               shrinkWrap: true,
-                                              physics: const NeverScrollableScrollPhysics(),
+                                              physics:
+                                                  const NeverScrollableScrollPhysics(),
                                               itemCount: steps.length,
                                               itemBuilder: (context, index) {
                                                 var dataas = steps[index];
-                                                IconData iconData = _getIconForInstruction(dataas['html_instructions'].toString());
-                                                return  index < currentInstructionIndex ?
-                                                SizedBox():
-                                                ListTile(
-                                                  onTap: (){
-                                                  },
-                                                    leading: Icon(iconData),
-                                                  title: HtmlWidget(dataas[
-                                                          'html_instructions']
-                                                      .toString()),
-
-                                                );
+                                                IconData iconData =
+                                                    _getIconForInstruction(dataas[
+                                                            'html_instructions']
+                                                        .toString());
+                                                return index <
+                                                        currentInstructionIndex
+                                                    ? SizedBox()
+                                                    : ListTile(
+                                                        onTap: () {},
+                                                        leading: Icon(iconData),
+                                                        title: HtmlWidget(dataas[
+                                                                'html_instructions']
+                                                            .toString()),
+                                                      );
                                               }),
                                         ]);
                                       } else {
@@ -788,9 +798,6 @@ class HomeView extends GetView<HomeController> {
       ),
     );
   }
-
-
-
 
   IconData _getIconForInstruction(String instruction) {
     if (instruction.contains('left')) {

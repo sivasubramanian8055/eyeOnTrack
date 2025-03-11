@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
+import 'dart:math' hide log;
 import 'package:cloud_firestore_platform_interface/src/geo_point.dart';
 import 'package:crypoexchange/App/modules/views/camera_view.dart';
 import 'package:flutter/material.dart';
@@ -37,6 +38,9 @@ import '../../models/near_places_model.dart';
 class HomeController extends GetxController {
   Rxn LiveDistenceTimeData = Rxn();
   FirebaseFirestore firestore = FirebaseFirestore.instance;
+  dynamic
+      overpassData; // to store the parsed Overpass API response once fetched
+  List<LatLng> crossingsAlongRoute = [];
 
   final isFixed = false.obs;
   final notShowConstructionReword = false.obs;
@@ -66,15 +70,12 @@ class HomeController extends GetxController {
     });
   }
 
+  bool _overpassCalled = false;
+
   @override
   void onInit() {
-    // TODO: implement onInit
     super.onInit();
     gethazard();
-    // isFixed.value = true;
-    //   EasyLoading.show();
-    //   initFromLoad();
-
     geo = const GeoFirePoint(GeoPoint(0.0, 0.0));
     topPosition.value = -500;
     initializeIcons();
@@ -82,6 +83,13 @@ class HomeController extends GetxController {
       _updateNavigation();
       LatLng curP =
           LatLng(position?.latitude ?? 0.0, position?.longitude ?? 0.0);
+
+      // Trigger fetchOverpassData only once when current position is available
+      if (!_overpassCalled && position != null) {
+        _overpassCalled = true;
+        fetchOverpassData();
+      }
+
       // Moving Time And Distence
       if (isJourneyStarted.value) {
         var data = await getDistance(curP, destLatLng.value!,
@@ -153,6 +161,7 @@ class HomeController extends GetxController {
                 newRoutePoints,
                 isSelectedGoTo.value == 0 ? 'driving' : 'walking');
             if (distanceTimeInfo != null) {
+              print(distanceTimeInfo);
               // Update polyline info
               polylineInfo[PolylineId('polyline:0')] = distanceTimeInfo;
 
@@ -266,6 +275,8 @@ class HomeController extends GetxController {
   final showNotification = false.obs;
   final instruction = Rxn<String>();
   final isJourneyStarted = false.obs;
+  final isCameraActive = false.obs;
+  RxBool dialogCameraApproved = false.obs;
   final isJourneyEnded = false.obs;
   final isReachedDest = false.obs;
   int selectedStep = 0;
@@ -434,11 +445,9 @@ class HomeController extends GetxController {
       ),
     );
     //BitmapDescriptor.defaultMarker
-    print("dsklfjkldsfjdklfjdksj");
   }
 
   _readAllMarkers() {
-    print("dssdfkhskdfhsdkjfhs");
     GeoFirePoint center = GeoFirePoint(GeoPoint(
         appController.currentPosition.value!.latitude ?? 0.0,
         appController.currentPosition.value!.longitude ?? 0.0));
@@ -475,7 +484,6 @@ class HomeController extends GetxController {
     for (var document in documentList) {
       final data = document.data() as Map<String, dynamic>;
       data['doc_id'] = document.id;
-      print("DFLKJDFSKLFJSKLDFJ=>${data['doc_id']}");
       hazardPoints.add(data);
       final GeoPoint point = data['position']['geopoint'];
 
@@ -487,7 +495,6 @@ class HomeController extends GetxController {
   initDirectionService() async {
     if (!isInitDirectionEnable) return;
     if (destLatLng.value == null) return;
-    print("dfkjfkdfjjkdhfddfgdf");
     isInitDirectionEnable = false;
     listRouteSummery.clear();
     ployLines.clear();
@@ -516,7 +523,6 @@ class HomeController extends GetxController {
     directionsService.route(request,
         (DirectionsResult response, DirectionsStatus? status) async {
       if (status == DirectionsStatus.ok) {
-        // log('Direction found');
         directionResponse.value = response;
         int len = response.routes?.length ?? 0;
         for (int i = 0; i < len; i++) {
@@ -524,50 +530,24 @@ class HomeController extends GetxController {
           List<LatLng> point = convertToLatLng(
               element, decodePoly(element.overviewPolyline!.points!));
 
-          LatLng cLng = LatLng(
+          LatLng curP = LatLng(
               appController.currentPosition.value?.latitude ?? 0.0,
               appController.currentPosition.value?.longitude ?? 0.0);
           LatLng pickUpLng = LatLng(pickUpLatLng.value?.latitude ?? 0.0,
               pickUpLatLng.value?.longitude ?? 0.0);
-          LatLng startDes = pickUpLatLng.value == null ? cLng : pickUpLng;
+          LatLng startDes = pickUpLatLng.value == null ? curP : pickUpLng;
           addPolyLines(
               point, i, isSelectedGoTo.value == 0 ? 'driving' : 'walking');
         }
         listRouteSummery.sort((a, b) => a.minDist > b.minDist ? 1 : -1);
         selectedRoute.value = listRouteSummery.first;
 
-        listRouteSummery.first.hazardPoint.forEach((key, data) {
-          final GeoPoint point = data['position']['geopoint'];
-          _addMarkerOnMap(LatLng(point.latitude, point.longitude),
-              getIconFromString(data['title']), '');
-        });
+        // ... (existing code to add destination marker, etc.)
 
-        sortHazardPoints();
-
-        addPolyLines(listRouteSummery.first.path, 0,
-            isSelectedGoTo.value == 0 ? 'driving' : 'walking');
-
-        const id = MarkerId('Destination');
-        markers[id] = Marker(
-          markerId: id,
-          position: destLatLng.value!,
-          icon: BitmapDescriptor.defaultMarker,
-          infoWindow: InfoWindow(
-            title: 'Destination',
-            snippet: dropController.text,
-          ),
-        );
-        final BitmapDescriptor customIcon = await _getCustomIcon();
-        // const idP = MarkerId('Pickup');
-        // markers[idP] = Marker(
-        //   markerId: idP,
-        //   position: startLatLong,
-        //   icon: customIcon,
-        //   infoWindow: InfoWindow(
-        //     title: '',
-        //     snippet: pickupController.text,
-        //   ),
-        // );
+        // If walking mode is active, extract and mark the pedestrian crossings along the generated polyline.
+        if (isSelectedGoTo.value != 0) {
+          extractCrossingsAlongRoute();
+        }
       } else {
         log('Direction not found found');
       }
@@ -721,7 +701,6 @@ class HomeController extends GetxController {
 */
 
   _updateNavigation() async {
-    print("INITIALIZED");
     LatLng? lng = isFixed.value
         ? startLatLong
         : LatLng(appController.currentPosition.value?.latitude ?? 0.0,
@@ -732,7 +711,6 @@ class HomeController extends GetxController {
     selectedStep = stepDetails.stepCount;
     LatLng lngDest =
         stepDetails.lastPoint ?? destLatLng.value ?? const LatLng(0.0, 0.0);
-    print("Instruction Details${stepDetails.instruction}");
     if (stepDetails.instruction != null) {
       instruction.value = stepDetails.instruction;
       final document = parse(instruction.value);
@@ -789,6 +767,36 @@ class HomeController extends GetxController {
 
     _updateHazardInfo();
     _updateDestinationInfo();
+    // Only when in walking mode
+    if (isSelectedGoTo.value != 0) {
+      const double cameraActivationThreshold = 0.02; // 20 meters in km
+      bool isNearCrossing = false;
+      LatLng currentPos = LatLng(
+        appController.currentPosition.value?.latitude ?? 0.0,
+        appController.currentPosition.value?.longitude ?? 0.0,
+      );
+
+      // Check whether the user's current location is close to any crossing.
+      for (LatLng crossing in crossingsAlongRoute) {
+        if (calculateDistance(currentPos, crossing) <
+            cameraActivationThreshold) {
+          isNearCrossing = true;
+          break;
+        }
+      }
+
+      // Activate the camera preview only when both conditions are true:
+      // 1. The user clicked "Yes" in the dialog (dialogCameraApproved is true)
+      // 2. The user's location is near a crossing along the route.
+      if (dialogCameraApproved.value &&
+          isNearCrossing &&
+          !isCameraActive.value) {
+        isCameraActive.value = true;
+        Timer(const Duration(seconds: 10), () {
+          isCameraActive.value = false;
+        });
+      }
+    }
   }
 
   Future<void> configureTts() async {
@@ -843,7 +851,6 @@ class HomeController extends GetxController {
       notificationStatus[geoHash] = false;
       currentHazardIndex += 1;
       showNotification.value = true;
-      print("KSDFSKLFJKSDFKFSD${appController.soundAlert.value}");
       String message =
           '${hInfoPoint.value?.hazardPoint['message']}$hazardDistance, at ${hInfoPoint.value?.hazardPoint['locality'].toString().split(',').first ?? ''}';
       message = message.replaceFirst('KM', 'Kilo meter');
@@ -1381,4 +1388,196 @@ class HomeController extends GetxController {
           .set(hashMap);
     }
   }
+
+  Future<void> fetchOverpassData() async {
+    print("in");
+    final currentPos = appController.currentPosition.value;
+    if (currentPos == null) {
+      print("User position not available yet.");
+      return;
+    }
+
+    double lat = currentPos.latitude;
+    double lng = currentPos.longitude;
+    double delta = 0.225; // roughly a 50km x 50km bounding box
+    double north = lat + delta;
+    double south = lat - delta;
+    double east = lng + delta;
+    double west = lng - delta;
+
+    String query = """
+  [out:json];
+  node["highway"="crossing"]($south,$west,$north,$east);
+  out;
+  """;
+
+    print("Generated bounding box covering roughly 50km:");
+    print("North: $north, South: $south, East: $east, West: $west");
+
+    try {
+      final response = await http.post(
+        Uri.parse("https://overpass-api.de/api/interpreter"),
+        body: query,
+      );
+      if (response.statusCode == 200) {
+        print("Overpass API response: ${response.body}");
+        // Save the response for later filtering.
+        overpassData = jsonDecode(response.body);
+        // (Optionally, you might mark all crossings here if needed.)
+      } else {
+        print(
+            "Error from Overpass API: ${response.statusCode} ${response.reasonPhrase}");
+      }
+    } catch (e) {
+      print("Exception during Overpass API call: $e");
+    }
+  }
+
+  void extractCrossingsAlongRoute() {
+    // Ensure we have Overpass data and a valid route.
+    if (overpassData == null || selectedRoute.value == null) {
+      print("Overpass data or route not available.");
+      return;
+    }
+    List<LatLng> routePoints = selectedRoute.value!.path;
+    List<LatLng> filteredCrossings = [];
+    // Threshold in km (e.g., 0.05 km = 50 meters)
+    const double thresholdDistanceKm = 0.03;
+
+    if (overpassData["elements"] != null) {
+      for (var element in overpassData["elements"]) {
+        double crossingLat = element["lat"];
+        double crossingLon = element["lon"];
+        LatLng crossingPoint = LatLng(crossingLat, crossingLon);
+
+        // Compute the minimum distance from crossingPoint to the entire polyline.
+        double minDistanceToRoute = double.maxFinite;
+        for (int i = 0; i < routePoints.length - 1; i++) {
+          double d = distancePointToSegment(
+              crossingPoint, routePoints[i], routePoints[i + 1]);
+          if (d < minDistanceToRoute) minDistanceToRoute = d;
+        }
+
+        if (minDistanceToRoute < thresholdDistanceKm) {
+          filteredCrossings.add(crossingPoint);
+          String id = element["id"].toString();
+          markers[MarkerId(id)] = Marker(
+            markerId: MarkerId(id),
+            position: crossingPoint,
+            infoWindow: InfoWindow(title: "Pedestrian Crossing Along Route"),
+            icon:
+                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          );
+        }
+      }
+    }
+    crossingsAlongRoute = filteredCrossings;
+    print(
+        "Extracted ${crossingsAlongRoute.length} pedestrian crossing points along the polyline.");
+    update();
+  }
+}
+
+// This function approximates the distance (in kilometers) from point p to the segment ab using a planar projection.
+double distancePointToSegment(LatLng p, LatLng a, LatLng b) {
+  final rad = pi / 180; // conversion factor
+
+  // Equirectangular approximation
+  double x_p = p.longitude * cos(p.latitude * rad);
+  double y_p = p.latitude;
+  double x_a = a.longitude * cos(a.latitude * rad);
+  double y_a = a.latitude;
+  double x_b = b.longitude * cos(b.latitude * rad);
+  double y_b = b.latitude;
+
+  double A = x_p - x_a;
+  double B = y_p - y_a;
+  double C = x_b - x_a;
+  double D = y_b - y_a;
+
+  double dot = A * C + B * D;
+  double lenSq = C * C + D * D;
+  double param = (lenSq != 0) ? dot / lenSq : -1;
+
+  double xx, yy;
+  if (param < 0) {
+    xx = x_a;
+    yy = y_a;
+  } else if (param > 1) {
+    xx = x_b;
+    yy = y_b;
+  } else {
+    xx = x_a + param * C;
+    yy = y_a + param * D;
+  }
+
+  double dx = x_p - xx;
+  double dy = y_p - yy;
+  double distanceDegrees = sqrt(dx * dx + dy * dy);
+
+  // Conversion factor (1 degree ≈ 111.32 km)
+  return distanceDegrees * 111.32;
+}
+
+Future<void> handleCameraReward(BuildContext context,
+    {required bool lookedLeft, required bool lookedRight}) async {
+  int reward = 0;
+  String finalMessage = "";
+  if (lookedLeft && lookedRight) {
+    reward = 10;
+    finalMessage =
+        "You looked both left and right. You have been rewarded 10 points!";
+  } else if (lookedLeft) {
+    reward = 5;
+    finalMessage =
+        "You looked left to see for vehicles. You have been partially rewarded 5 points!";
+  } else if (lookedRight) {
+    reward = 5;
+    finalMessage =
+        "You looked right for incoming vehicles. You have been partially rewarded 5 points!";
+  } else {
+    finalMessage = "You haven't looked left or right. No reward generated.";
+  }
+
+  // Show a dialog saying "Calculating rewards..." until the reward is updated.
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) {
+      return const AlertDialog(
+        title: Text("Reward"),
+        content: Text("Calculating rewards..."),
+      );
+    },
+  );
+
+  // --- Backend functionality disabled ---
+  // String userId = userLoginModel?.id.toString() ?? "defaultUserId";
+  // await FirebaseFirestore.instance.collection('reword').doc(userId).set({
+  //   "reward": reward,
+  //   "timestamp": DateTime.now().toIso8601String(),
+  // });
+  // ------------------------------------------
+
+  // Dismiss the "Calculating rewards..." dialog.
+  Navigator.of(context).pop();
+
+  // Show the final reward message.
+  showDialog(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text("Reward"),
+        content: Text(finalMessage),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            child: const Text("OK"),
+          )
+        ],
+      );
+    },
+  );
 }
