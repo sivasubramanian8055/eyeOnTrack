@@ -4,6 +4,7 @@ import 'dart:developer';
 import 'dart:math' hide log;
 import 'package:cloud_firestore_platform_interface/src/geo_point.dart';
 import 'package:crypoexchange/App/modules/views/camera_view.dart';
+import 'package:crypoexchange/App/modules/views/status_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_easyloading/flutter_easyloading.dart';
@@ -24,6 +25,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:location_geocoder/location_geocoder.dart' as loc;
 import 'package:material_speed_dial/material_speed_dial.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:pedometer/pedometer.dart';
 import '../../../app_controller.dart';
 import '../../data/auth_data.dart';
 import '../../helper/app_paths.dart';
@@ -72,9 +74,39 @@ class HomeController extends GetxController {
 
   bool _overpassCalled = false;
 
+  // Pedometer fields
+  late StreamSubscription<StepCount> _pedometerSubscription;
+  final RxInt stepCount = 0.obs; // Holds the current step count.
+  int journeyStartStepCount = 0; // Recorded when a journey starts.
+
+  // This method initializes the pedometer subscription.
+  void initializePedometer() {
+    print("Initializing pedometer...");
+    _pedometerSubscription = Pedometer.stepCountStream.listen(
+      (StepCount event) {
+        // Update the reactive step count.
+        stepCount.value = event.steps;
+        print("Step Count Event Received: ${event.steps}");
+      },
+      onError: (error) {
+        print("Pedometer Error: $error");
+      },
+    );
+  }
+
+  void startJourney() {
+    isJourneyStarted.value = true;
+    // Record the step count at the start of the journey.
+    journeyStartStepCount = stepCount.value;
+    print("Journey started at step count: $journeyStartStepCount");
+    // Other initialization work...
+  }
+
   @override
   void onInit() {
     super.onInit();
+    // Initialize pedometer early
+    initializePedometer();
     gethazard();
     geo = const GeoFirePoint(GeoPoint(0.0, 0.0));
     topPosition.value = -500;
@@ -231,6 +263,12 @@ class HomeController extends GetxController {
     pickUpLiner();
   }
 
+  @override
+  void onClose() {
+    _pedometerSubscription.cancel();
+    super.onClose();
+  }
+
   pickUpLiner() {
     pickUpLatLng.listen((pick) {
       if (pick == null) return;
@@ -276,6 +314,7 @@ class HomeController extends GetxController {
   final instruction = Rxn<String>();
   final isJourneyStarted = false.obs;
   final isCameraActive = false.obs;
+  VoidCallback? onTriggerRewardFromCamera;
   RxBool dialogCameraApproved = false.obs;
   final isJourneyEnded = false.obs;
   final isReachedDest = false.obs;
@@ -293,6 +332,11 @@ class HomeController extends GetxController {
   late GeoFirePoint geo;
   final selectedRoute = Rxn<RouteSummery>();
   final topPosition = 50.0.obs;
+  final RxInt totalAwarenessChecks = 0.obs;
+  final RxInt successfulAwarenessChecks = 0.obs; // both left and right
+  final RxInt partialAwarenessChecks = 0.obs; // one side only
+  final RxInt failedAwarenessChecks = 0.obs;
+  final RxInt totalRewardsEarned = 0.obs;
   TextEditingController pickupController = TextEditingController();
   TextEditingController dropController = TextEditingController();
   AppController appController = Get.find<AppController>();
@@ -391,6 +435,69 @@ class HomeController extends GetxController {
       // If the distance is within 1 km, skip waypoints and directly get the route
     }
     ployLines.add(polyline);
+  }
+
+  Future<void> handleCameraReward(BuildContext context,
+      {required bool lookedLeft, required bool lookedRight}) async {
+    print("LOOKED_LEFT=>${lookedLeft}, LOOKED_RIGHT=>${lookedRight}");
+    totalAwarenessChecks.value++;
+    if (lookedLeft && lookedRight) {
+      successfulAwarenessChecks.value++;
+    } else if (lookedLeft || lookedRight) {
+      partialAwarenessChecks.value++;
+    } else {
+      failedAwarenessChecks.value++;
+    }
+    int reward = 0;
+    String finalMessage = "";
+    if (lookedLeft && lookedRight) {
+      reward = 10;
+      finalMessage =
+          "You looked both left and right. You have been rewarded 10 points!";
+    } else if (lookedLeft) {
+      reward = 5;
+      finalMessage =
+          "You looked left to see for vehicles. You have been partially rewarded 5 points!";
+    } else if (lookedRight) {
+      reward = 5;
+      finalMessage =
+          "You looked right for incoming vehicles. You have been partially rewarded 5 points!";
+    } else {
+      finalMessage = "You haven't looked left or right. No reward generated.";
+    }
+    totalRewardsEarned.value += reward;
+    // Show a dialog via Get.dialog instead of showDialog.
+    Get.dialog(
+      const AlertDialog(
+        title: Text("Reward"),
+        content: Text("Calculating rewards..."),
+      ),
+      barrierDismissible: false,
+    );
+
+    // Simulate reward processing delay.
+    await Future.delayed(const Duration(seconds: 2));
+
+    // Dismiss the previous dialog.
+    if (Get.isDialogOpen ?? false) {
+      Get.back();
+    }
+
+    // Show the final reward message.
+    Get.dialog(
+      AlertDialog(
+        title: const Text("Reward"),
+        content: Text(finalMessage),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Get.back();
+            },
+            child: const Text("OK"),
+          )
+        ],
+      ),
+    );
   }
 
   void _showDistanceTimeInfo(PolylineId polylineId) {
@@ -626,7 +733,7 @@ class HomeController extends GetxController {
         appController.currentPosition.value?.latitude ?? 0.0,
         appController.currentPosition.value?.latitude ?? 0.0);
     for (var element in hazardPointSorted) {
-      final GeoPoint point = element.hazardPoint['position']['geopoint'];
+      final GeoPoint point = element.hazardPoint['position']['geohash'];
       double distance = calculateDistance(
           isFixed.value ? startLatLong : latLngCurrent,
           LatLng(point.latitude, point.longitude));
@@ -794,6 +901,7 @@ class HomeController extends GetxController {
         isCameraActive.value = true;
         Timer(const Duration(seconds: 10), () {
           isCameraActive.value = false;
+          onTriggerRewardFromCamera!();
         });
       }
     }
@@ -833,7 +941,7 @@ class HomeController extends GetxController {
     _sortHzPoints();
 
     HazardSorted hazardSorted = hazardPointSorted.first;
-    final GeoPoint point = hazardSorted.hazardPoint['position']['geopoint'];
+    final GeoPoint point = hazardSorted.hazardPoint['position']['geohash'];
     final String geoHash = hazardSorted.hazardPoint['position']['geohash'];
     LatLng hLng = LatLng(point.latitude, point.longitude);
     LatLng cLng = /*isFixed.value?startLatLong:*/ LatLng(
@@ -862,7 +970,7 @@ class HomeController extends GetxController {
 
     if (hInfoPoint.value != null) {
       final GeoPoint point =
-          hInfoPoint.value?.hazardPoint['position']['geopoint'];
+          hInfoPoint.value?.hazardPoint['position']['geohash'];
       LatLng hLng = LatLng(point.latitude, point.longitude);
       LatLng cLng = LatLng(appController.currentPosition.value?.latitude ?? 0.0,
           appController.currentPosition.value?.longitude ?? 0.0);
@@ -929,6 +1037,16 @@ class HomeController extends GetxController {
   }
 
   clearRoute() async {
+    Get.dialog(
+      Status_view(
+        totalAwarenessChecks: totalAwarenessChecks.value,
+        successfulAwarenessChecks: successfulAwarenessChecks.value,
+        partialAwarenessChecks: partialAwarenessChecks.value,
+        failedAwarenessChecks: failedAwarenessChecks.value,
+        totalJourneySteps: stepCount.value - journeyStartStepCount,
+        totalRewardsEarned: totalRewardsEarned.value,
+      ),
+    );
     notShowConstructionReword.value = false;
     isMapInitialized.value = false;
     isReachedDest.value = false;
@@ -956,6 +1074,11 @@ class HomeController extends GetxController {
     hazardPoints.clear();
     hazardPointSorted.clear();
     hazardDistance.value = '0.0';
+    totalAwarenessChecks.value = 0;
+    successfulAwarenessChecks.value = 0;
+    partialAwarenessChecks.value = 0;
+    failedAwarenessChecks.value = 0;
+    totalRewardsEarned.value = 0;
     EasyLoading.showToast('Journey Ended');
   }
 

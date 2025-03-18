@@ -81,7 +81,7 @@ double calculateDistance(LatLng lng1, LatLng lng2) {
   double lat2 = lng2.latitude;
   double lon2 = lng2.longitude;
   double mDist = Geolocator.distanceBetween(lat1, lon1, lat2, lon2);
-  print("DISTENCE_HAI_BHAYA=>${mDist / 1000}");
+  // print("DISTENCE_HAI_BHAYA=>${mDist / 1000}");
   return mDist / 1000;
 }
 

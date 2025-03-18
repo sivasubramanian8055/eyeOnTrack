@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,10 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:get/get.dart';
+import '../modules/controllers/home_controller.dart';
+
+// Create a global RouteObserver (if not already defined)
+final RouteObserver<PageRoute> routeObserver = RouteObserver<PageRoute>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,9 +25,10 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorObservers: [routeObserver],
       home: FrontCameraPreview(
         onClose: () {
-          print('FrontCameraPreview closed.');
+          debugPrint("FrontCameraPreview closed via onClose callback.");
         },
       ),
     );
@@ -340,28 +346,60 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
       enableLandmarks: true,
     ),
   );
-
-  DateTime? _lastProcessTime;
   String _text = '';
   final _cameraLensDirection = CameraLensDirection.front;
-
   Uint8List? _leftEyeBytes;
   Uint8List? _rightEyeBytes;
-
-  // New fields to track gaze.
   bool _lookedLeft = false;
   bool _lookedRight = false;
+  bool _rewardTriggered = false; // ensure reward is triggered only once
+  Timer? _rewardTimer;
+  DateTime? _lastProcessTime;
 
   @override
   void initState() {
     super.initState();
+    debugPrint("FrontCameraPreview initState called.");
     _text = widget.overlayText;
+    final HomeController homeController = Get.find<HomeController>();
+    homeController.onTriggerRewardFromCamera = _triggerReward;
+    // _startRewardTimer();
   }
 
   @override
   void dispose() {
+    debugPrint("FrontCameraPreview dispose called.");
+    _rewardTimer?.cancel();
     _faceDetector.close();
     super.dispose();
+  }
+
+  /// Starts a timer that triggers reward after 10 seconds.
+  void _startRewardTimer() {
+    debugPrint("Starting reward timer.");
+    _rewardTimer?.cancel();
+    _rewardTimer = Timer(const Duration(seconds: 10), () {
+      debugPrint("Reward timer expired, mounted = $mounted");
+      if (mounted && !_rewardTriggered) {
+        _triggerReward();
+      }
+    });
+  }
+
+  /// Triggers the reward by calling HomeController.handleCameraReward
+  /// and then pops this view to destroy the widget instance.
+  void _triggerReward() {
+    try {
+      // Ensure HomeController is registered with GetX (via Get.put(HomeController()) etc.)
+      HomeController controller = Get.find<HomeController>();
+      controller.handleCameraReward(
+        context,
+        lookedLeft: _lookedLeft,
+        lookedRight: _lookedRight,
+      );
+    } catch (e) {
+      debugPrint("Error triggering reward: $e");
+    }
   }
 
   // Convert NV21 bytes to RGB image using the image package.
@@ -529,13 +567,9 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
               onImage: _processImage,
               initialCameraLensDirection: _cameraLensDirection,
               onClose: () {
-                // Delegate reward handling.
-                Get.find().handleCameraReward(
-                  context,
-                  lookedLeft: _lookedLeft,
-                  lookedRight: _lookedRight,
-                );
-                widget.onClose();
+                if (!_rewardTriggered) {
+                  _triggerReward();
+                }
               },
               text: _text,
             ),
