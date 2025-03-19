@@ -79,6 +79,13 @@ class HomeController extends GetxController {
   final RxInt stepCount = 0.obs; // Holds the current step count.
   int journeyStartStepCount = 0; // Recorded when a journey starts.
 
+  // Add a reactive list to record the journey path.
+  RxList<LatLng> recordedJourney = <LatLng>[].obs;
+
+  // Add new reactive DateTime variables to store journey start and end times.
+  Rxn<DateTime> journeyStartTime = Rxn<DateTime>();
+  Rxn<DateTime> journeyEndTime = Rxn<DateTime>();
+
   // This method initializes the pedometer subscription.
   void initializePedometer() {
     print("Initializing pedometer...");
@@ -92,14 +99,6 @@ class HomeController extends GetxController {
         print("Pedometer Error: $error");
       },
     );
-  }
-
-  void startJourney() {
-    isJourneyStarted.value = true;
-    // Record the step count at the start of the journey.
-    journeyStartStepCount = stepCount.value;
-    print("Journey started at step count: $journeyStartStepCount");
-    // Other initialization work...
   }
 
   @override
@@ -121,9 +120,9 @@ class HomeController extends GetxController {
         _overpassCalled = true;
         fetchOverpassData();
       }
-
       // Moving Time And Distence
       if (isJourneyStarted.value) {
+        recordedJourneyMode.value = isSelectedGoTo.value;
         var data = await getDistance(curP, destLatLng.value!,
             isSelectedGoTo.value == 0 ? 'driving' : 'walking');
         if (data != null && data['status'].toString() == 'OK') {
@@ -148,13 +147,73 @@ class HomeController extends GetxController {
           }
         });
 
-        const double deviationThreshold = 0.20; // in meters
+        const double deviationThreshold = 0.05; // in meters
 
-        if (minVal <= deviationThreshold &&
-            selectedPolylineInfo['Instructions'] != null) {
+        if (minVal > deviationThreshold) {
+          // User is off the calculated path.
+          if (isJourneyStarted.value) {
+            print(
+                "User has deviated from the polyline, recalculating shortest route from current location...");
+
+            // Clear previous polylines
+            ployLines.clear();
+
+            // Use current position as the new origin
+            LatLng currentLocation = curP;
+            LatLng destination = selectedRoute.value!.path.last;
+
+            // Request a new route from current location to destination
+            final request = DirectionsRequest(
+              origin:
+                  "${currentLocation.latitude},${currentLocation.longitude}",
+              destination: "${destination.latitude},${destination.longitude}",
+              alternatives: false, // choose the shortest route
+              travelMode: isSelectedGoTo.value == 0
+                  ? TravelMode.driving
+                  : TravelMode.walking,
+              unitSystem: UnitSystem.imperial,
+            );
+            directionsService.route(request,
+                (DirectionsResult response, DirectionsStatus? status) async {
+              if (status == DirectionsStatus.ok &&
+                  response.routes != null &&
+                  response.routes!.isNotEmpty) {
+                // Use the first (shortest) route from the response
+                DirectionsRoute newRoute = response.routes!.first;
+                List<LatLng> newRoutePoints = convertToLatLng(
+                    newRoute, decodePoly(newRoute.overviewPolyline!.points!));
+
+                // Add the new route polyline to the map
+                addPolyLines(newRoutePoints, 0,
+                    isSelectedGoTo.value == 0 ? 'driving' : 'walking');
+
+                // Recalculate and update distance, time, and step instructions
+                var distanceTimeInfo = await getDistanceUsingDirections(
+                  newRoutePoints,
+                  isSelectedGoTo.value == 0 ? 'driving' : 'walking',
+                );
+                if (distanceTimeInfo != null) {
+                  polylineInfo[PolylineId('polyline:0')] = distanceTimeInfo;
+                  selectedPolylineInfo.addAll({
+                    "Distance": "${distanceTimeInfo['distance']['text']}",
+                    "Time": "${distanceTimeInfo['duration']['text']}",
+                    "Instructions": distanceTimeInfo['steps']
+                  });
+                  print(
+                      "UPDATED_POLYLINE_INFO => ${selectedPolylineInfo.value}");
+                }
+
+                // Clear old pedestrian crossing markers and fetch new ones along the new route.
+                extractCrossingsAlongRoute(newRoutePoints);
+              } else {
+                print("Error generating new route: $status");
+              }
+            });
+          }
+        } else {
+          // The user is following the calculated path; update the current instruction index.
           List instructions = selectedPolylineInfo.value['Instructions'];
           List steps = instructions.first['steps'];
-
           double minDistToInstruction = double.maxFinite;
           int currentInstructionIndex = -1;
 
@@ -165,49 +224,16 @@ class HomeController extends GetxController {
             );
             double distanceToInstruction =
                 calculateDistance(curP, stepLocation);
-
             if (distanceToInstruction < minDistToInstruction) {
               minDistToInstruction = distanceToInstruction;
               currentInstructionIndex = i;
             }
           }
-
           isCurrentInstructionIndex.value = currentInstructionIndex;
-        } else {
-          if (isJourneyStarted.value) {
-            // EasyLoading.showToast('New route created');
-            print(
-                "User has deviated from the polyline, recalculating route...");
-
-            // Clear previous polylines
-            ployLines.clear();
-
-            // Regenerate the polyline from the current position to the destination
-            LatLng destination = selectedRoute.value!.path.last;
-            List<LatLng> newRoutePoints = [curP, ...selectedRoute.value!.path];
-            addPolyLines(newRoutePoints, 0,
-                isSelectedGoTo.value == 0 ? 'driving' : 'walking');
-
-            // Recalculate distance, time, and instructions
-            var distanceTimeInfo = await getDistanceUsingDirections(
-                newRoutePoints,
-                isSelectedGoTo.value == 0 ? 'driving' : 'walking');
-            if (distanceTimeInfo != null) {
-              print(distanceTimeInfo);
-              // Update polyline info
-              polylineInfo[PolylineId('polyline:0')] = distanceTimeInfo;
-
-              // Update selected route info
-              selectedPolylineInfo.addAll({
-                "Distance": "${distanceTimeInfo['distance']['text']}",
-                "Time": "${distanceTimeInfo['duration']['text']}",
-                "Instructions": distanceTimeInfo['steps']
-              });
-
-              print("UPDATED_POLYLINE_INFO => ${selectedPolylineInfo.value}");
-            }
-          }
         }
+      }
+      if (isJourneyStarted.value) {
+        recordedJourney.add(curP);
       }
     });
 
@@ -324,6 +350,7 @@ class HomeController extends GetxController {
   int currentHazardIndex = 0;
   final directionResponse = Rxn<DirectionsResult>();
   final directionsService = DirectionsService();
+  RxInt recordedJourneyMode = 0.obs;
   final speed = '0.0KM/H'.obs;
   BehaviorSubject<double> radius = BehaviorSubject<double>.seeded(6.0);
   final isMapInitialized = false.obs;
@@ -1037,16 +1064,26 @@ class HomeController extends GetxController {
   }
 
   clearRoute() async {
-    Get.dialog(
-      Status_view(
-        totalAwarenessChecks: totalAwarenessChecks.value,
-        successfulAwarenessChecks: successfulAwarenessChecks.value,
-        partialAwarenessChecks: partialAwarenessChecks.value,
-        failedAwarenessChecks: failedAwarenessChecks.value,
-        totalJourneySteps: stepCount.value - journeyStartStepCount,
-        totalRewardsEarned: totalRewardsEarned.value,
-      ),
-    );
+    if (isJourneyStarted.value) {
+      endJourney();
+    }
+    if (isSelectedGoTo.value != 0) {
+      Get.dialog(
+        Status_view(
+          totalAwarenessChecks: totalAwarenessChecks.value,
+          successfulAwarenessChecks: successfulAwarenessChecks.value,
+          partialAwarenessChecks: partialAwarenessChecks.value,
+          failedAwarenessChecks: failedAwarenessChecks.value,
+          totalJourneySteps: stepCount.value - journeyStartStepCount,
+          totalRewardsEarned: totalRewardsEarned.value,
+        ),
+      );
+      totalAwarenessChecks.value = 0;
+      successfulAwarenessChecks.value = 0;
+      partialAwarenessChecks.value = 0;
+      failedAwarenessChecks.value = 0;
+      totalRewardsEarned.value = 0;
+    }
     notShowConstructionReword.value = false;
     isMapInitialized.value = false;
     isReachedDest.value = false;
@@ -1074,11 +1111,6 @@ class HomeController extends GetxController {
     hazardPoints.clear();
     hazardPointSorted.clear();
     hazardDistance.value = '0.0';
-    totalAwarenessChecks.value = 0;
-    successfulAwarenessChecks.value = 0;
-    partialAwarenessChecks.value = 0;
-    failedAwarenessChecks.value = 0;
-    totalRewardsEarned.value = 0;
     EasyLoading.showToast('Journey Ended');
   }
 
@@ -1556,16 +1588,24 @@ class HomeController extends GetxController {
     }
   }
 
-  void extractCrossingsAlongRoute() {
-    // Ensure we have Overpass data and a valid route.
-    if (overpassData == null || selectedRoute.value == null) {
-      print("Overpass data or route not available.");
+  void extractCrossingsAlongRoute([List<LatLng>? routePoints]) {
+    // Clear previous pedestrian crossing markers.
+    markers.removeWhere((markerId, marker) =>
+        marker.infoWindow.title == "Pedestrian Crossing Along Route");
+    if (routePoints == null) {
+      if (selectedRoute.value == null) {
+        print("Route not available.");
+        return;
+      }
+      routePoints = selectedRoute.value!.path;
+    }
+    if (overpassData == null) {
+      print("Overpass data not available.");
       return;
     }
-    List<LatLng> routePoints = selectedRoute.value!.path;
+
     List<LatLng> filteredCrossings = [];
-    // Threshold in km (e.g., 0.05 km = 50 meters)
-    const double thresholdDistanceKm = 0.03;
+    const double thresholdDistanceKm = 0.03; // e.g., 30 meters
 
     if (overpassData["elements"] != null) {
       for (var element in overpassData["elements"]) {
@@ -1573,12 +1613,14 @@ class HomeController extends GetxController {
         double crossingLon = element["lon"];
         LatLng crossingPoint = LatLng(crossingLat, crossingLon);
 
-        // Compute the minimum distance from crossingPoint to the entire polyline.
+        // Compute the minimum distance from crossingPoint to any segment of the provided routePoints.
         double minDistanceToRoute = double.maxFinite;
         for (int i = 0; i < routePoints.length - 1; i++) {
           double d = distancePointToSegment(
               crossingPoint, routePoints[i], routePoints[i + 1]);
-          if (d < minDistanceToRoute) minDistanceToRoute = d;
+          if (d < minDistanceToRoute) {
+            minDistanceToRoute = d;
+          }
         }
 
         if (minDistanceToRoute < thresholdDistanceKm) {
@@ -1598,6 +1640,130 @@ class HomeController extends GetxController {
     print(
         "Extracted ${crossingsAlongRoute.length} pedestrian crossing points along the polyline.");
     update();
+  }
+
+  // Call this method to clear the recorded journey when needed.
+  void clearRecordedJourney() {
+    recordedJourney.clear();
+  }
+
+  Future<void> displayRecordedJourney({
+    required List<LatLng> journeyPoints,
+    required int mode,
+    required LatLng origin,
+    required LatLng destination,
+  }) async {
+    if (journeyPoints.isEmpty) {
+      print("No recorded journey available.");
+      return;
+    }
+
+    // Auto-populate the "from" and "to" fields.
+    isSelectedGoTo.value = mode;
+    pickUpLatLng.value = origin;
+    destLatLng.value = destination;
+    pickupController.text = "From: ${origin.latitude}, ${origin.longitude}";
+    dropController.text =
+        "To: ${destination.latitude}, ${destination.longitude}";
+
+    // Clear previous polyline(s) then display the route.
+    ployLines.clear();
+    String movingMode = mode == 0 ? 'driving' : 'walking';
+
+    addPolyLines(journeyPoints, 0, movingMode);
+
+    // Fetch and update distance, duration, and step instructions.
+    var distanceTimeInfo =
+        await getDistanceUsingDirections(journeyPoints, movingMode);
+    if (distanceTimeInfo != null) {
+      PolylineId polylineId = PolylineId('polyline:0');
+      polylineInfo[polylineId] = distanceTimeInfo;
+      selectedPolylineInfo.addAll({
+        "Distance": "${distanceTimeInfo['distance']['text']}",
+        "Time": "${distanceTimeInfo['duration']['text']}",
+        "Instructions": distanceTimeInfo['steps']
+      });
+      print(
+          "Updated instructions: ${selectedPolylineInfo.value['Instructions']}");
+    }
+  }
+
+  // Call this method to start a new journey.
+  void startJourney() {
+    recordedJourney.clear(); // Clear any previously recorded route
+    if (pickUpLatLng.value == null &&
+        appController.currentPosition.value != null) {
+      pickUpLatLng.value = LatLng(
+        appController.currentPosition.value!.latitude,
+        appController.currentPosition.value!.longitude,
+      );
+    }
+    journeyStartStepCount = stepCount.value;
+    journeyStartTime.value = DateTime.now();
+    recordedJourneyMode.value =
+        isSelectedGoTo.value; // Save the mode (0 => driving, 1 => walking)
+    print(
+        "Journey started at ${journeyStartTime.value} with mode ${recordedJourneyMode.value}");
+  }
+
+  // When the journey ends, call endJourney()
+  // which also calls storeJourneyHistory() to save the details.
+  Future<void> endJourney() async {
+    journeyEndTime.value = DateTime.now();
+    print(
+        "Journey ended at ${journeyEndTime.value}. Recorded ${recordedJourney.length} points.");
+    await storeJourneyHistory();
+  }
+
+  // This method stores the journey history in Firestore under a subcollection "history"
+  // of the current user document.
+  Future<void> storeJourneyHistory() async {
+    // Use journeyStartTime and journeyEndTime with a fallback
+    print('in');
+    DateTime startTime = journeyStartTime.value ?? DateTime.now();
+    DateTime endTime = journeyEndTime.value ?? DateTime.now();
+
+    // Build the history data to store.
+    Map<String, dynamic> historyData = {
+      'journeyDate': startTime.toIso8601String(),
+      'journeyStartTime': startTime.toIso8601String(),
+      'journeyEndTime': endTime.toIso8601String(),
+      'journeyStartLocation': {
+        'lat': pickUpLatLng.value?.latitude,
+        'lng': pickUpLatLng.value?.longitude,
+      },
+      'journeyEndLocation': {
+        'lat': destLatLng.value?.latitude,
+        'lng': destLatLng.value?.longitude,
+      },
+      'recordedJourney': recordedJourney
+          .map((point) => {'lat': point.latitude, 'lng': point.longitude})
+          .toList(),
+      'status': {
+        'totalAwarenessChecks': totalAwarenessChecks.value,
+        'successfulAwarenessChecks': successfulAwarenessChecks.value,
+        'partialAwarenessChecks': partialAwarenessChecks.value,
+        'failedAwarenessChecks': failedAwarenessChecks.value,
+        'stepsTaken': stepCount.value - journeyStartStepCount,
+        'totalRewardsEarned': totalRewardsEarned.value,
+      },
+      // Optionally, record the mode as a string.
+      'mode': isSelectedGoTo.value,
+    };
+
+    // Use the current user ID to build the Firestore path.
+    String userId = userLoginModel?.id.toString() ?? "unknownUser";
+    // Use Firestore auto-ID for each journey history document.
+    try {
+      await firestore
+          .collection('users')
+          .doc(userId)
+          .collection('history')
+          .add(historyData);
+      print("Journey history stored successfully for user: $userId");
+    } catch (e) {
+      print("Error storing journey history: $e");
+    }
   }
 }
 

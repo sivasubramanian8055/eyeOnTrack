@@ -102,13 +102,36 @@ class HomeView extends GetView<HomeController> {
                             FloatingActionButton(
                               heroTag: 'current',
                               onPressed: () => controller.recenterCamera(),
+                              backgroundColor: Colors.white,
                               child: const Icon(
                                 Icons.location_searching,
                                 color: Colors.blue,
                               ),
-                              backgroundColor: Colors.white,
                             ),
                             const SizedBox(height: 10),
+                            FloatingActionButton(
+                              heroTag: 'recordedJourney',
+                              onPressed: () {
+                                if (controller.recordedJourney.isNotEmpty) {
+                                  final origin =
+                                      controller.recordedJourney.first;
+                                  final destination =
+                                      controller.recordedJourney.last;
+                                  controller.displayRecordedJourney(
+                                    journeyPoints:
+                                        controller.recordedJourney.toList(),
+                                    mode: controller.recordedJourneyMode.value,
+                                    origin: origin,
+                                    destination: destination,
+                                  );
+                                } else {
+                                  print("No recorded journey.");
+                                }
+                              },
+                              backgroundColor: Colors.white,
+                              child:
+                                  const Icon(Icons.history, color: Colors.blue),
+                            ),
                           ],
                         ),
                       ),
@@ -474,6 +497,8 @@ class HomeView extends GetView<HomeController> {
                                                                 .isJourneyStarted
                                                                 .value;
                                                         controller
+                                                            .startJourney();
+                                                        controller
                                                             .recenterCamera();
                                                       },
                                                       child: Row(
@@ -784,6 +809,27 @@ class HomeView extends GetView<HomeController> {
                                   ],
                                 ),
                               ),
+                            ),
+                            ElevatedButton(
+                              onPressed: () {
+                                // Use the first and last points in recordedJourney as origin/destination.
+                                if (controller.recordedJourney.isNotEmpty) {
+                                  LatLng origin =
+                                      controller.recordedJourney.first;
+                                  LatLng destination =
+                                      controller.recordedJourney.last;
+                                  controller.displayRecordedJourney(
+                                    journeyPoints:
+                                        controller.recordedJourney.toList(),
+                                    mode: controller.recordedJourneyMode.value,
+                                    origin: origin,
+                                    destination: destination,
+                                  );
+                                } else {
+                                  print("No journey recorded.");
+                                }
+                              },
+                              child: const Text("Show Recorded Journey"),
                             ),
                           ],
                         ),
