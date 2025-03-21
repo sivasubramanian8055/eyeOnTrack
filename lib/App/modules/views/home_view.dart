@@ -112,21 +112,7 @@ class HomeView extends GetView<HomeController> {
                             FloatingActionButton(
                               heroTag: 'recordedJourney',
                               onPressed: () {
-                                if (controller.recordedJourney.isNotEmpty) {
-                                  final origin =
-                                      controller.recordedJourney.first;
-                                  final destination =
-                                      controller.recordedJourney.last;
-                                  controller.displayRecordedJourney(
-                                    journeyPoints:
-                                        controller.recordedJourney.toList(),
-                                    mode: controller.recordedJourneyMode.value,
-                                    origin: origin,
-                                    destination: destination,
-                                  );
-                                } else {
-                                  print("No recorded journey.");
-                                }
+                                controller.showJourneyHistory();
                               },
                               backgroundColor: Colors.white,
                               child:
@@ -809,27 +795,6 @@ class HomeView extends GetView<HomeController> {
                                   ],
                                 ),
                               ),
-                            ),
-                            ElevatedButton(
-                              onPressed: () {
-                                // Use the first and last points in recordedJourney as origin/destination.
-                                if (controller.recordedJourney.isNotEmpty) {
-                                  LatLng origin =
-                                      controller.recordedJourney.first;
-                                  LatLng destination =
-                                      controller.recordedJourney.last;
-                                  controller.displayRecordedJourney(
-                                    journeyPoints:
-                                        controller.recordedJourney.toList(),
-                                    mode: controller.recordedJourneyMode.value,
-                                    origin: origin,
-                                    destination: destination,
-                                  );
-                                } else {
-                                  print("No journey recorded.");
-                                }
-                              },
-                              child: const Text("Show Recorded Journey"),
                             ),
                           ],
                         ),

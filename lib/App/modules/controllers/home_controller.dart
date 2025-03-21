@@ -4,6 +4,7 @@ import 'dart:developer';
 import 'dart:math' hide log;
 import 'package:cloud_firestore_platform_interface/src/geo_point.dart';
 import 'package:crypoexchange/App/modules/views/camera_view.dart';
+import 'package:crypoexchange/App/modules/views/journey_history_view.dart';
 import 'package:crypoexchange/App/modules/views/status_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +27,7 @@ import 'package:location_geocoder/location_geocoder.dart' as loc;
 import 'package:material_speed_dial/material_speed_dial.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:pedometer/pedometer.dart';
+import 'package:geocoding/geocoding.dart';
 import '../../../app_controller.dart';
 import '../../data/auth_data.dart';
 import '../../helper/app_paths.dart';
@@ -147,7 +149,7 @@ class HomeController extends GetxController {
           }
         });
 
-        const double deviationThreshold = 0.05; // in meters
+        const double deviationThreshold = 0.10; // in meters
 
         if (minVal > deviationThreshold) {
           // User is off the calculated path.
@@ -1647,11 +1649,26 @@ class HomeController extends GetxController {
     recordedJourney.clear();
   }
 
+  Future<String> getAddressFromLatLng(LatLng latlng) async {
+    try {
+      List<Placemark> placemarks =
+          await placemarkFromCoordinates(latlng.latitude, latlng.longitude);
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        return "${place.name}, ${place.locality}, ${place.administrativeArea}, ${place.country}";
+      }
+      return "${latlng.latitude}, ${latlng.longitude}";
+    } catch (e) {
+      print("Reverse geocoding error: $e");
+      return "${latlng.latitude}, ${latlng.longitude}";
+    }
+  }
+
   Future<void> displayRecordedJourney({
     required List<LatLng> journeyPoints,
     required int mode,
-    required LatLng origin,
-    required LatLng destination,
+    required String origin,
+    required String destination,
   }) async {
     if (journeyPoints.isEmpty) {
       print("No recorded journey available.");
@@ -1660,11 +1677,20 @@ class HomeController extends GetxController {
 
     // Auto-populate the "from" and "to" fields.
     isSelectedGoTo.value = mode;
-    pickUpLatLng.value = origin;
-    destLatLng.value = destination;
-    pickupController.text = "From: ${origin.latitude}, ${origin.longitude}";
-    dropController.text =
-        "To: ${destination.latitude}, ${destination.longitude}";
+    pickUpLatLng.value = journeyPoints.first;
+    destLatLng.value = journeyPoints.last;
+    String originAddress = origin.trim();
+    if (originAddress.isEmpty) {
+      originAddress = await getAddressFromLatLng(journeyPoints.first);
+    }
+
+    // If destination (drop) is empty, use last point from journeyPoints and reverse geocode.
+    String destinationAddress = destination.trim();
+    if (destinationAddress.isEmpty) {
+      destinationAddress = await getAddressFromLatLng(journeyPoints.last);
+    }
+    pickupController.text = originAddress;
+    dropController.text = destinationAddress;
 
     // Clear previous polyline(s) then display the route.
     ployLines.clear();
@@ -1691,13 +1717,7 @@ class HomeController extends GetxController {
   // Call this method to start a new journey.
   void startJourney() {
     recordedJourney.clear(); // Clear any previously recorded route
-    if (pickUpLatLng.value == null &&
-        appController.currentPosition.value != null) {
-      pickUpLatLng.value = LatLng(
-        appController.currentPosition.value!.latitude,
-        appController.currentPosition.value!.longitude,
-      );
-    }
+    isJourneyStarted.value = true;
     journeyStartStepCount = stepCount.value;
     journeyStartTime.value = DateTime.now();
     recordedJourneyMode.value =
@@ -1719,7 +1739,7 @@ class HomeController extends GetxController {
   // of the current user document.
   Future<void> storeJourneyHistory() async {
     // Use journeyStartTime and journeyEndTime with a fallback
-    print('in');
+    print('in storer');
     DateTime startTime = journeyStartTime.value ?? DateTime.now();
     DateTime endTime = journeyEndTime.value ?? DateTime.now();
 
@@ -1728,14 +1748,8 @@ class HomeController extends GetxController {
       'journeyDate': startTime.toIso8601String(),
       'journeyStartTime': startTime.toIso8601String(),
       'journeyEndTime': endTime.toIso8601String(),
-      'journeyStartLocation': {
-        'lat': pickUpLatLng.value?.latitude,
-        'lng': pickUpLatLng.value?.longitude,
-      },
-      'journeyEndLocation': {
-        'lat': destLatLng.value?.latitude,
-        'lng': destLatLng.value?.longitude,
-      },
+      'journeyStartLocation': pickupController.text,
+      'journeyEndLocation': dropController.text,
       'recordedJourney': recordedJourney
           .map((point) => {'lat': point.latitude, 'lng': point.longitude})
           .toList(),
@@ -1764,6 +1778,11 @@ class HomeController extends GetxController {
     } catch (e) {
       print("Error storing journey history: $e");
     }
+  }
+
+  void showJourneyHistory() {
+    final String userId = userLoginModel?.id.toString() ?? "";
+    Get.to(() => JourneyHistoryView(userId: userId));
   }
 }
 
