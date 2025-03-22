@@ -28,6 +28,7 @@ import 'package:material_speed_dial/material_speed_dial.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:pedometer/pedometer.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../../app_controller.dart';
 import '../../data/auth_data.dart';
 import '../../helper/app_paths.dart';
@@ -89,7 +90,13 @@ class HomeController extends GetxController {
   Rxn<DateTime> journeyEndTime = Rxn<DateTime>();
 
   // This method initializes the pedometer subscription.
-  void initializePedometer() {
+  void initializePedometer() async {
+    bool granted = await _checkActivityRecognitionPermission();
+    if (!granted) {
+      print(
+          "Activity recognition permission not granted. Pedometer will not work.");
+      return;
+    }
     print("Initializing pedometer...");
     _pedometerSubscription = Pedometer.stepCountStream.listen(
       (StepCount event) {
@@ -101,6 +108,15 @@ class HomeController extends GetxController {
         print("Pedometer Error: $error");
       },
     );
+  }
+
+  Future<bool> _checkActivityRecognitionPermission() async {
+    bool granted = await Permission.activityRecognition.isGranted;
+    if (!granted) {
+      granted = (await Permission.activityRecognition.request()) ==
+          PermissionStatus.granted;
+    }
+    return granted;
   }
 
   @override
@@ -152,6 +168,7 @@ class HomeController extends GetxController {
         const double deviationThreshold = 0.10; // in meters
 
         if (minVal > deviationThreshold) {
+          print("in");
           // User is off the calculated path.
           if (isJourneyStarted.value) {
             print(
@@ -204,9 +221,6 @@ class HomeController extends GetxController {
                   print(
                       "UPDATED_POLYLINE_INFO => ${selectedPolylineInfo.value}");
                 }
-
-                // Clear old pedestrian crossing markers and fetch new ones along the new route.
-                extractCrossingsAlongRoute(newRoutePoints);
               } else {
                 print("Error generating new route: $status");
               }
@@ -410,7 +424,8 @@ class HomeController extends GetxController {
       {}.obs; // Store distance and time info for each polyline
 
   void addPolyLines(List<LatLng> point, int index, String movingMode) async {
-    PolylineId polylineId = PolylineId('polyline:$index');
+    PolylineId polylineId = PolylineId('polyline id:$index');
+    print(polylineId);
     // var distanceTimeInfo = await getDistanceUsingDirections(point, movingMode);
 
     // Calculate the total distance between the first and last points
@@ -463,6 +478,7 @@ class HomeController extends GetxController {
       print('NOPAS_POINTS=>${ployLines}');
       // If the distance is within 1 km, skip waypoints and directly get the route
     }
+    print("triggered poly");
     ployLines.add(polyline);
   }
 
@@ -606,7 +622,6 @@ class HomeController extends GetxController {
         // if (!documentRead) return;
         _updatePath(documentList);
         this.documentList = documentList;
-
         initDirectionService();
         Timer(const Duration(seconds: 5), () => isInitDirectionEnable = true);
         EasyLoading.dismiss();
@@ -677,10 +692,6 @@ class HomeController extends GetxController {
         }
         listRouteSummery.sort((a, b) => a.minDist > b.minDist ? 1 : -1);
         selectedRoute.value = listRouteSummery.first;
-
-        // ... (existing code to add destination marker, etc.)
-
-        // If walking mode is active, extract and mark the pedestrian crossings along the generated polyline.
         if (isSelectedGoTo.value != 0) {
           extractCrossingsAlongRoute();
         }
@@ -1068,24 +1079,25 @@ class HomeController extends GetxController {
   clearRoute() async {
     if (isJourneyStarted.value) {
       endJourney();
+      if (isSelectedGoTo.value != 0) {
+        Get.dialog(
+          Status_view(
+            totalAwarenessChecks: totalAwarenessChecks.value,
+            successfulAwarenessChecks: successfulAwarenessChecks.value,
+            partialAwarenessChecks: partialAwarenessChecks.value,
+            failedAwarenessChecks: failedAwarenessChecks.value,
+            totalJourneySteps: stepCount.value - journeyStartStepCount,
+            totalRewardsEarned: totalRewardsEarned.value,
+          ),
+        );
+        totalAwarenessChecks.value = 0;
+        successfulAwarenessChecks.value = 0;
+        partialAwarenessChecks.value = 0;
+        failedAwarenessChecks.value = 0;
+        totalRewardsEarned.value = 0;
+      }
     }
-    if (isSelectedGoTo.value != 0) {
-      Get.dialog(
-        Status_view(
-          totalAwarenessChecks: totalAwarenessChecks.value,
-          successfulAwarenessChecks: successfulAwarenessChecks.value,
-          partialAwarenessChecks: partialAwarenessChecks.value,
-          failedAwarenessChecks: failedAwarenessChecks.value,
-          totalJourneySteps: stepCount.value - journeyStartStepCount,
-          totalRewardsEarned: totalRewardsEarned.value,
-        ),
-      );
-      totalAwarenessChecks.value = 0;
-      successfulAwarenessChecks.value = 0;
-      partialAwarenessChecks.value = 0;
-      failedAwarenessChecks.value = 0;
-      totalRewardsEarned.value = 0;
-    }
+
     notShowConstructionReword.value = false;
     isMapInitialized.value = false;
     isReachedDest.value = false;
@@ -1138,11 +1150,8 @@ class HomeController extends GetxController {
     isInitDirectionEnable = true;
     LiveDistenceTimeData.value = null;
     // _updateNavigation();
-    if (position == 0) {
-      initDirectionService();
-    } else {
-      initDirectionService();
-    }
+    initDirectionService();
+
     print('TRAVELED_MODE_CHANGED=>${isSelectedGoTo.value}');
   }
 
@@ -1547,7 +1556,7 @@ class HomeController extends GetxController {
   }
 
   Future<void> fetchOverpassData() async {
-    print("in");
+    print("in dev");
     final currentPos = appController.currentPosition.value;
     if (currentPos == null) {
       print("User position not available yet.");
@@ -1641,12 +1650,7 @@ class HomeController extends GetxController {
     crossingsAlongRoute = filteredCrossings;
     print(
         "Extracted ${crossingsAlongRoute.length} pedestrian crossing points along the polyline.");
-    update();
-  }
-
-  // Call this method to clear the recorded journey when needed.
-  void clearRecordedJourney() {
-    recordedJourney.clear();
+    // update();
   }
 
   Future<String> getAddressFromLatLng(LatLng latlng) async {
@@ -1697,7 +1701,6 @@ class HomeController extends GetxController {
     String movingMode = mode == 0 ? 'driving' : 'walking';
 
     addPolyLines(journeyPoints, 0, movingMode);
-
     // Fetch and update distance, duration, and step instructions.
     var distanceTimeInfo =
         await getDistanceUsingDirections(journeyPoints, movingMode);
@@ -1718,7 +1721,8 @@ class HomeController extends GetxController {
   void startJourney() {
     recordedJourney.clear(); // Clear any previously recorded route
     isJourneyStarted.value = true;
-    journeyStartStepCount = stepCount.value;
+    journeyStartStepCount =
+        stepCount.value; // Record current steps at journey start
     journeyStartTime.value = DateTime.now();
     recordedJourneyMode.value =
         isSelectedGoTo.value; // Save the mode (0 => driving, 1 => walking)

@@ -679,6 +679,20 @@ class HomeView extends GetView<HomeController> {
                             const SizedBox(
                               height: 10,
                             ),
+                            if (controller.isSelectedGoTo.value == 1)
+                              Obx(() {
+                                int stepsTaken = controller.stepCount.value -
+                                    controller.journeyStartStepCount;
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10.0, vertical: 8.0),
+                                  child: myText(
+                                    title: 'Steps Taken: $stepsTaken',
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                );
+                              }),
                             //LiveDistenceTimeData.value
                             Obx(() => Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
