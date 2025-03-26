@@ -39,8 +39,13 @@ import '../../helper/route_follow_dialog.dart';
 import '../../helper/step_manager.dart';
 import '../../models/common_model.dart';
 import '../../models/near_places_model.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class HomeController extends GetxController {
+  // Remove dialogCameraApproved and add checkAwareness instead.
+  // This value should be loaded from Firestore preferences.
+  RxBool checkAwareness = false.obs;
+  RxBool notifyRewards = false.obs;
   Rxn LiveDistenceTimeData = Rxn();
   FirebaseFirestore firestore = FirebaseFirestore.instance;
   dynamic
@@ -119,9 +124,36 @@ class HomeController extends GetxController {
     return granted;
   }
 
+  Future<bool> _checkNotificationPermission() async {
+    if (await Permission.notification.isGranted) {
+      return true;
+    } else {
+      // Request permission.
+      PermissionStatus status = await Permission.notification.request();
+      if (status != PermissionStatus.granted) {
+        // Optionally inform the user and offer to open app settings.
+        Get.snackbar(
+          "Permission Required",
+          "Please enable notification permissions in settings to receive rewards notifications.",
+          snackPosition: SnackPosition.BOTTOM,
+        );
+        openAppSettings();
+        return false;
+      }
+      return true;
+    }
+  }
+
   @override
   void onInit() {
     super.onInit();
+    // Load the stored user preferences (including checkAwareness) from Firestore.
+    _loadUserPreferences();
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    final InitializationSettings initializationSettings =
+        InitializationSettings(android: initializationSettingsAndroid);
+    flutterLocalNotificationsPlugin.initialize(initializationSettings);
     // Initialize pedometer early
     initializePedometer();
     gethazard();
@@ -205,7 +237,9 @@ class HomeController extends GetxController {
                 // Add the new route polyline to the map
                 addPolyLines(newRoutePoints, 0,
                     isSelectedGoTo.value == 0 ? 'driving' : 'walking');
-
+                if (isSelectedGoTo.value != 0) {
+                  extractCrossingsAlongRoute();
+                }
                 // Recalculate and update distance, time, and step instructions
                 var distanceTimeInfo = await getDistanceUsingDirections(
                   newRoutePoints,
@@ -305,6 +339,36 @@ class HomeController extends GetxController {
     pickUpLiner();
   }
 
+  // New function to load the checkAwareness preference from Firestore.
+  Future<void> _loadUserPreferences() async {
+    try {
+      final docSnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userLoginModel!.id)
+          .get();
+      if (docSnapshot.exists) {
+        final Map<String, dynamic>? prefs =
+            (docSnapshot.data() ?? {})['preferences'] as Map<String, dynamic>?;
+        if (prefs != null) {
+          checkAwareness.value = prefs['checkAwareness'] ?? false;
+          notifyRewards.value = prefs['notifyRewards'] ?? false;
+        }
+      }
+    } catch (e) {
+      debugPrint("Error loading user preferences: $e");
+    }
+    if (notifyRewards.value) {
+      bool granted = await _checkNotificationPermission();
+      if (!granted) {
+        // If permission is not granted, you might want to prompt the user here.
+        // For example, show a snackbar (already done inside _checkNotificationPermission) or log the issue.
+        debugPrint("Notification permission was not granted.");
+      } else {
+        debugPrint("Notification permission granted.");
+      }
+    }
+  }
+
   @override
   void onClose() {
     _pedometerSubscription.cancel();
@@ -346,6 +410,8 @@ class HomeController extends GetxController {
   }
 
   FlutterTts flutterTts = FlutterTts();
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
   double minDistance = double.infinity;
   double minDistance1 = double.infinity;
   final hazardDistance = '0.0'.obs;
@@ -357,7 +423,6 @@ class HomeController extends GetxController {
   final isJourneyStarted = false.obs;
   final isCameraActive = true.obs;
   VoidCallback? onTriggerRewardFromCamera;
-  RxBool dialogCameraApproved = false.obs;
   final isJourneyEnded = false.obs;
   final isReachedDest = false.obs;
   int selectedStep = 0;
@@ -494,54 +559,76 @@ class HomeController extends GetxController {
       failedAwarenessChecks.value++;
     }
     int reward = 0;
-    String finalMessage = "";
+    String rewardMessage = "";
     if (lookedLeft && lookedRight) {
       reward = 10;
-      finalMessage =
-          "You looked both left and right. You have been rewarded 10 points!";
+      rewardMessage = "Reward Earned: 10 points (looked both left and right)";
     } else if (lookedLeft) {
       reward = 5;
-      finalMessage =
-          "You looked left to see for vehicles. You have been partially rewarded 5 points!";
+      rewardMessage = "Reward Earned: 5 points (Left only)";
     } else if (lookedRight) {
       reward = 5;
-      finalMessage =
-          "You looked right for incoming vehicles. You have been partially rewarded 5 points!";
+      rewardMessage = "Reward Earned: 5 points (Right only)";
     } else {
-      finalMessage = "You haven't looked left or right. No reward generated.";
+      rewardMessage = "No reward earned";
     }
     totalRewardsEarned.value += reward;
-    // Show a dialog via Get.dialog instead of showDialog.
-    Get.dialog(
-      const AlertDialog(
-        title: Text("Reward"),
-        content: Text("Calculating rewards..."),
-      ),
-      barrierDismissible: false,
-    );
 
-    // Simulate reward processing delay.
-    await Future.delayed(const Duration(seconds: 2));
-
-    // Dismiss the previous dialog.
-    if (Get.isDialogOpen ?? false) {
-      Get.back();
+    // If notifyRewards is true, show a push notification instead of dialogs.
+    if (notifyRewards.value) {
+      await _showRewardNotification(rewardMessage);
+    } else {
+      // Show a dialog saying "Calculating rewards..."
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return const AlertDialog(
+            title: Text("Reward"),
+            content: Text("Calculating rewards..."),
+          );
+        },
+      );
+      // Simulate reward processing delay.
+      await Future.delayed(const Duration(seconds: 2));
+      Navigator.of(context).pop(); // Dismiss the calculating dialog.
+      showDialog(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text("Reward"),
+            content: Text(rewardMessage),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: const Text("OK"),
+              )
+            ],
+          );
+        },
+      );
     }
+  }
 
-    // Show the final reward message.
-    Get.dialog(
-      AlertDialog(
-        title: const Text("Reward"),
-        content: Text(finalMessage),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Get.back();
-            },
-            child: const Text("OK"),
-          )
-        ],
-      ),
+  // Helper method to show a local push notification with the reward message.
+  Future<void> _showRewardNotification(String message) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'reward_channel_id',
+      'Rewards',
+      channelDescription: 'Notification channel for reward messages',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+    );
+    const NotificationDetails platformChannelSpecifics =
+        NotificationDetails(android: androidPlatformChannelSpecifics);
+    await flutterLocalNotificationsPlugin.show(
+      0, // Notification ID
+      'Reward Earned',
+      message,
+      platformChannelSpecifics,
     );
   }
 
@@ -916,33 +1003,41 @@ class HomeController extends GetxController {
     _updateDestinationInfo();
     // Only when in walking mode
     if (isSelectedGoTo.value != 0) {
-      const double cameraActivationThreshold = 0.02; // 20 meters in km
+      const double cameraActivationThreshold = 0.1; // 0.1 km = 100m
       bool isNearCrossing = false;
       LatLng currentPos = LatLng(
         appController.currentPosition.value?.latitude ?? 0.0,
         appController.currentPosition.value?.longitude ?? 0.0,
       );
 
-      // Check whether the user's current location is close to any crossing.
+      // Check if any crossing along route is within threshold.
       for (LatLng crossing in crossingsAlongRoute) {
-        if (calculateDistance(currentPos, crossing) <
-            cameraActivationThreshold) {
+        double dist = calculateDistance(currentPos, crossing);
+        if (dist < cameraActivationThreshold) {
           isNearCrossing = true;
           break;
         }
       }
 
-      // Activate the camera preview only when both conditions are true:
-      // 1. The user clicked "Yes" in the dialog (dialogCameraApproved is true)
-      // 2. The user's location is near a crossing along the route.
-      if (dialogCameraApproved.value &&
-          isNearCrossing &&
-          !isCameraActive.value) {
+      // Debug prints to verify conditions.
+      print("checkAwareness: ${checkAwareness.value}");
+      print("isNearCrossing: $isNearCrossing");
+      print("isCameraActive (before): ${isCameraActive.value}");
+
+      // Activate camera preview if conditions are met.
+      if (checkAwareness.value && isNearCrossing && !isCameraActive.value) {
+        print("Activating camera preview...");
         isCameraActive.value = true;
+        print("isCameraActive (after setting true): ${isCameraActive.value}");
         Timer(const Duration(seconds: 10), () {
           isCameraActive.value = false;
-          onTriggerRewardFromCamera!();
+          // Check that onTriggerRewardFromCamera is assigned to avoid errors.
+          if (onTriggerRewardFromCamera != null) {
+            onTriggerRewardFromCamera!();
+          }
         });
+      } else {
+        print("Camera preview not activated; conditions not met.");
       }
     }
   }

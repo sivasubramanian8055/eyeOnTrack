@@ -410,11 +410,10 @@ class HomeView extends GetView<HomeController> {
                   ),
                   const SizedBox(height: 10),
                   // This is adding hazard point button
-                  /*     Container(
+                  Container(
                     margin: const EdgeInsets.all(10),
                     child: floatingActionsForHazard(context),
                   ),
-*/
                   Expanded(
                     child: Material(
                       elevation: 10.0,
@@ -630,10 +629,6 @@ class HomeView extends GetView<HomeController> {
                                   borderRadius: BorderRadius.circular(5),
                                   onTap: () {
                                     controller.onSeletctGoTo(1);
-                                    if (Platform.isAndroid) {
-                                      CameraHelper.showAwarenessDialog(
-                                          context, controller);
-                                    }
                                   },
                                   child: Column(
                                     children: [
