@@ -355,7 +355,7 @@ class HomeController extends GetxController {
   final showNotification = false.obs;
   final instruction = Rxn<String>();
   final isJourneyStarted = false.obs;
-  final isCameraActive = false.obs;
+  final isCameraActive = true.obs;
   VoidCallback? onTriggerRewardFromCamera;
   RxBool dialogCameraApproved = false.obs;
   final isJourneyEnded = false.obs;

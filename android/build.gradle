@@ -4,6 +4,7 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        maven { url "https://chaquo.com/maven" }
     }
 
     dependencies {
@@ -15,6 +16,9 @@ buildscript {
         
         // Kotlin Gradle Plugin
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+
+        // Chaquopy Plugin for Python Support
+        classpath "com.chaquo.python:gradle:16.0.0"
     }
 }
 

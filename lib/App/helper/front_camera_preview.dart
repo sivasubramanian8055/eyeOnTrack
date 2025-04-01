@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:async';
 import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:get/get.dart';
+import 'python_channel.dart'; // Import the Python channel helper.
 import '../modules/controllers/home_controller.dart';
 
 // Create a global RouteObserver (if not already defined)
@@ -434,6 +436,12 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
     return outImg;
   }
 
+  /// Converts NV21 bytes to a JPEG-encoded image.
+  Uint8List nv21ToJpeg(Uint8List nv21Bytes, int width, int height) {
+    final rgbImage = convertNV21ToRGB(nv21Bytes, width, height);
+    return Uint8List.fromList(img.encodeJpg(rgbImage, quality: 85));
+  }
+
   // Crop a 150x150 region centered at the given eye position.
   img.Image cropEye(img.Image rgbImage, Point<double> eyePosition) {
     final centerX = eyePosition.x.round();
@@ -464,9 +472,7 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
     if (faces.isNotEmpty) {
       // For simplicity, use the first detected face.
       final face = faces.first;
-      // headEulerAngleY returns the rotation (in degrees) around the Y axis.
       final eulerY = face.headEulerAngleY;
-      // You can adjust thresholds as needed.
       String gaze;
       if (eulerY != null) {
         if (eulerY > 10) {
@@ -481,9 +487,37 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
         setState(() {
           _text = 'Looking $gaze';
         });
+
+        // When face is straight, send image to Python channel.
+        if (gaze == 'straight') {
+          final int width = inputImage.metadata!.size.width.toInt();
+          final int height = inputImage.metadata!.size.height.toInt();
+          final jpegBytes = nv21ToJpeg(nv21Bytes, width, height);
+
+          // Decode the image using the image package.
+          img.Image? original = img.decodeImage(jpegBytes);
+          if (original != null) {
+            // Rotate the image by 270 degrees (adjust as needed).
+            img.Image rotated = img.copyRotate(original, angle: 270);
+            // Encode the rotated image to JPEG.
+            final rotatedJpegBytes = Uint8List.fromList(img.encodeJpg(rotated));
+
+            // Send the rotated image to the Python channel.
+            final pythonResult =
+                await PythonChannel.processStraightFrame(rotatedJpegBytes);
+            print("Python channel result: $pythonResult");
+
+            setState(() {
+              _text = "Python says: $pythonResult";
+            });
+          }
+        }
       }
+    } else {
+      setState(() {
+        _text = "No face detected";
+      });
     }
-    setState(() {});
   }
 
   // This function determines the reward based on whether the user has looked left and/or right.
