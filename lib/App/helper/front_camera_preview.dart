@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
@@ -324,6 +325,25 @@ class EyeDisplayWidget extends StatelessWidget {
   }
 }
 
+class Debouncer {
+  final Duration delay;
+  VoidCallback? action;
+  Timer? _timer;
+
+  Debouncer({required this.delay});
+
+  /// Runs the [action] after the specified [delay]. Cancels any previous timer.
+  void run(VoidCallback action) {
+    _timer?.cancel();
+    _timer = Timer(delay, action);
+  }
+
+  /// Cancels the currently scheduled action.
+  void cancel() {
+    _timer?.cancel();
+  }
+}
+
 /// ------------------------------
 /// FrontCameraPreview: Face Detection, Eye Extraction & Gaze via Face Orientation
 /// ------------------------------
@@ -342,6 +362,7 @@ class FrontCameraPreview extends StatefulWidget {
 }
 
 class _FrontCameraPreviewState extends State<FrontCameraPreview> {
+  final debouncer = Debouncer(delay: Duration(milliseconds: 500));
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableContours: true,
@@ -488,29 +509,42 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
           _text = 'Looking $gaze';
         });
 
-        // When face is straight, send image to Python channel.
+        // When face is straight, sen
+        //d image to Python channel.
         if (gaze == 'straight') {
-          final int width = inputImage.metadata!.size.width.toInt();
-          final int height = inputImage.metadata!.size.height.toInt();
-          final jpegBytes = nv21ToJpeg(nv21Bytes, width, height);
+          debouncer.run(() async {
+            final int width = inputImage.metadata!.size.width.toInt();
+            final int height = inputImage.metadata!.size.height.toInt();
+            final jpegBytes = nv21ToJpeg(nv21Bytes, width, height);
 
-          // Decode the image using the image package.
-          img.Image? original = img.decodeImage(jpegBytes);
-          if (original != null) {
-            // Rotate the image by 270 degrees (adjust as needed).
-            img.Image rotated = img.copyRotate(original, angle: 270);
-            // Encode the rotated image to JPEG.
-            final rotatedJpegBytes = Uint8List.fromList(img.encodeJpg(rotated));
+            // Optional: rotate if necessary (remove if not needed)
+            // For example, if the camera preview is rotated:
+            final imgDecoded = img.decodeImage(jpegBytes);
+            if (imgDecoded != null) {
+              final rotated = img.copyRotate(imgDecoded, angle: 270);
+              final rotatedJpegBytes =
+                  Uint8List.fromList(img.encodeJpg(rotated));
 
-            // Send the rotated image to the Python channel.
-            final pythonResult =
-                await PythonChannel.processStraightFrame(rotatedJpegBytes);
-            print("Python channel result: $pythonResult");
+              // Call Python channel with the rotated JPEG bytes.
+              final pythonResult =
+                  await PythonChannel.processStraightFrame(rotatedJpegBytes);
+              print("Python channel result: $pythonResult");
 
-            setState(() {
-              _text = "Python says: $pythonResult";
-            });
-          }
+              // Parse the JSON returned by Python.
+              try {
+                final Map<String, dynamic> resultMap = jsonDecode(pythonResult);
+                setState(() {
+                  _leftEyeBytes = base64Decode(resultMap["left_eye"] ?? "");
+                  _rightEyeBytes = base64Decode(resultMap["right_eye"] ?? "");
+                  _text = "Processed eyes received";
+                });
+              } catch (e) {
+                setState(() {
+                  _text = "Error parsing Python result: $e";
+                });
+              }
+            }
+          });
         }
       }
     } else {

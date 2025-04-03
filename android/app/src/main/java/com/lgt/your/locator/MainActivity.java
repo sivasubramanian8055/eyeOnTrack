@@ -35,8 +35,8 @@ public class MainActivity extends FlutterFragmentActivity {
                         Python py = Python.getInstance();
                         Object pyResult = py.getModule("process_image")
                             .callAttr("process_straight_frame", imageBytes);
-                        // Send the result back to Flutter.
-                        result.success(pyResult.toString());
+                        // Return the processed eye image (as Base64 string, for example)
+                        result.success(pyResult);
                     } catch (Exception e) {
                         result.error("PYTHON_ERROR", e.getLocalizedMessage(), null);
                     }

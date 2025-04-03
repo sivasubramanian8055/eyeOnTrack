@@ -1,129 +1,84 @@
 import os
 import cv2
-import dlib
 import numpy as np
-from imutils import face_utils
-from tensorflow.keras.models import load_model
-import sys
+import base64
 
-# Adjust these paths as needed
-script_dir = os.path.dirname(__file__)
-predictor_path = os.path.join(script_dir, "shape_predictor_68_face_landmarks.dat")
-model_path_gaze = os.path.join(script_dir, "gazev3.1.h5")
+# ----- Configuration -----
+IMG_SIZE = (64, 56)   # Expected input size for your TFLite model in Flutter
 
-# Debug: Print out the model path and check if the file exists.
-print("DEBUG: Model path:", model_path_gaze)
-if not os.path.exists(model_path_gaze):
-    print("ERROR: Model file does not exist at this path!")
-    sys.exit(1)
-sys.stdout.flush()
-
-# Load dlib detectors and Keras model once at import time
-detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor(predictor_path)
-
-try:
-    print("DEBUG: Attempting to load model from:", model_path_gaze)
-    sys.stdout.flush()
-    model_gaze = load_model(model_path_gaze)
-    print("DEBUG: Model loaded successfully.")
-    sys.stdout.flush()
-except Exception as e:
-    import traceback
-    traceback.print_exc()
-    print("Error loading model from", model_path_gaze, ":", str(e))
-    sys.stdout.flush()
-    # Depending on your desired behavior, you might want to exit or assign a fallback.
-    model_gaze = None
-
-IMG_SIZE = (64, 56)  # (width, height) for your gaze model
-class_labels = ['center', 'left', 'right']
-
-def detect_gaze(eye_img):
-    """Runs the loaded gaze model on a preprocessed eye image."""
-    if model_gaze is None:
-        return "Model not loaded"
-    preds = model_gaze.predict(eye_img)
-    gaze_idx = int(np.argmax(preds[0]))
-    return class_labels[gaze_idx]
-
-def crop_eye(gray, eye_points):
-    """
-    Crops the eye region from a grayscale face image, 
-    given an array of landmark points (6 points for one eye).
-    """
-    x1, y1 = np.amin(eye_points, axis=0)
-    x2, y2 = np.amax(eye_points, axis=0)
-    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-
-    # Expand the bounding box slightly
-    w = (x2 - x1) * 1.2
-    h = w * IMG_SIZE[1] / IMG_SIZE[0]
-    margin_x, margin_y = w / 2, h / 2
-
-    min_x, min_y = int(cx - margin_x), int(cy - margin_y)
-    max_x, max_y = int(cx + margin_x), int(cy + margin_y)
-    eye_img = gray[min_y:max_y, min_x:max_x]
-    return eye_img
+# Load Haar cascades for face and eye detection.
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade  = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
 
 def process_frame(frame):
     """
-    1) Converts the frame to grayscale.
-    2) Detects the first face using dlib.
-    3) Extracts the left eye region (landmarks 36 to 41).
-    4) Resizes and normalizes the eye image for the gaze model.
-    5) Returns the detected gaze (string) or an error message.
+    Processes an OpenCV BGR frame:
+      1. Converts the frame to grayscale.
+      2. Detects the first face using Haar cascades.
+      3. Detects eyes within the face region using Haar cascades.
+      4. Crops each eye, resizes to IMG_SIZE, and encodes each as a JPEG.
+      5. Returns a dictionary with Base64‑encoded JPEG strings for the left and right eyes.
+         If detection fails, returns a dictionary with an "error" key.
     """
-    try:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector(gray)
-        if len(faces) == 0:
-            return "No face detected"
-
-        face = faces[0]
-        shape = predictor(gray, face)
-        shape_np = face_utils.shape_to_np(shape)
-        
-        # Debug prints to trace the type and content of shape_np.
-        print("DEBUG: Type of shape_np:", type(shape_np))
-        print("DEBUG: shape_np content:", shape_np)
-        if hasattr(shape_np, "shape"):
-            print("DEBUG: shape_np.shape:", shape_np.shape)
-        sys.stdout.flush()
-        
-        # Attempt to slice the array for landmarks 36 to 41.
-        print("DEBUG: Attempting to slice shape_np[36:42] ...")
-        sliced = shape_np[36:42]
-        print("DEBUG: Sliced array:", sliced)
-        sys.stdout.flush()
-        
-        eye_img_l = crop_eye(gray, sliced)
-        if eye_img_l.size == 0:
-            return "Could not crop left eye"
-
-        eye_img_l_resized = cv2.resize(eye_img_l, IMG_SIZE)
-        eye_input = eye_img_l_resized.reshape((1, IMG_SIZE[1], IMG_SIZE[0], 1)).astype(np.float32) / 255.0
-
-        gaze = detect_gaze(eye_input)
-        return f"Gaze: {gaze}"
+    # Convert frame to grayscale.
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return f"Error in process_frame: {str(e)}"
+    # Detect face using Haar cascades.
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+    if len(faces) == 0:
+        return {"error": "No face detected"}
+    
+    # Use the first detected face.
+    (x, y, w, h) = faces[0]
+    face_roi = gray[y:y+h, x:x+w]
+    
+    # Detect eyes within the face region.
+    eyes = eye_cascade.detectMultiScale(face_roi)
+    if len(eyes) == 0:
+        return {"error": "No eyes detected"}
+    
+    eyes_absolute = []
+    for (ex, ey, ew, eh) in eyes:
+        eyes_absolute.append((x + ex, y + ey, ew, eh))
+    
+    eyes_absolute = sorted(eyes_absolute, key=lambda v: v[0])
+    
+    left_eye_image = None
+    right_eye_image = None
+    
+    if len(eyes_absolute) >= 1:
+        (ex, ey, ew, eh) = eyes_absolute[0]
+        eye_roi = gray[ey:ey+eh, ex:ex+ew]
+        try:
+            eye_resized = cv2.resize(eye_roi, IMG_SIZE)
+        except cv2.error:
+            eye_resized = None
+        if eye_resized is not None:
+            ret, buffer = cv2.imencode('.jpg', eye_resized)
+            if ret:
+                left_eye_image = base64.b64encode(buffer).decode('utf-8')
+    
+    if len(eyes_absolute) >= 2:
+        (ex, ey, ew, eh) = eyes_absolute[1]
+        eye_roi = gray[ey:ey+eh, ex:ex+ew]
+        try:
+            eye_resized = cv2.resize(eye_roi, IMG_SIZE)
+        except cv2.error:
+            eye_resized = None
+        if eye_resized is not None:
+            ret, buffer = cv2.imencode('.jpg', eye_resized)
+            if ret:
+                right_eye_image = base64.b64encode(buffer).decode('utf-8')
+    
+    return {"left_eye": left_eye_image, "right_eye": right_eye_image}
 
 def process_straight_frame(image_bytes):
     """
     Accepts JPEG-encoded image bytes, decodes them into an OpenCV BGR frame,
-    then calls process_frame() to perform gaze detection.
+    then calls process_frame() to process the image and return the processed eye images.
     """
-    print("DEBUG: type(image_bytes):", type(image_bytes))
-    sys.stdout.flush()
-    try:
-        np_arr = np.frombuffer(image_bytes, np.uint8)
-    except Exception as ex:
-        return f"Error in np.frombuffer: {str(ex)}"
+    np_arr = np.frombuffer(image_bytes, np.uint8)
     frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     if frame is None:
-        return "Error: Could not decode image"
+        return {"error": "Could not decode image"}
     return process_frame(frame)
