@@ -319,6 +319,7 @@ class HomeController extends GetxController {
           appController.currentPosition.value?.longitude ?? 0.0);
       double distance = calculateDistance(latLngCurrent, dest);
       radius = BehaviorSubject<double>.seeded(distance);
+      _readAllMarkers();
       final id = MarkerId(Pointers.DESTINATION.toString());
       String title = dropController.text.split(',').first;
       // THIS IS DESTINATION MARKER
@@ -390,6 +391,7 @@ class HomeController extends GetxController {
           calculateDistance(latLngPickLocation, latLngDropLocation);
       print("HAZARD_sHowing_Radius=>$distance");
       radius = BehaviorSubject<double>.seeded(distance);
+      _readAllMarkers();
       final id = MarkerId(Pointers.DESTINATION.toString());
       final pickId = MarkerId('STARTLOCATION');
       String title = dropController.text.split(',').first;
@@ -468,6 +470,7 @@ class HomeController extends GetxController {
   final icFartControl = BitmapDescriptor.defaultMarker.obs;
   final icHospitalControl = BitmapDescriptor.defaultMarker.obs;
   final icParkControl = BitmapDescriptor.defaultMarker.obs;
+  final icCrossing = BitmapDescriptor.defaultMarker.obs;
   final icStartLocation = BitmapDescriptor.defaultMarker.obs;
   final icOther = BitmapDescriptor.defaultMarker.obs;
   final icNavigation = BitmapDescriptor.defaultMarker.obs;
@@ -773,15 +776,36 @@ class HomeController extends GetxController {
           LatLng pickUpLng = LatLng(pickUpLatLng.value?.latitude ?? 0.0,
               pickUpLatLng.value?.longitude ?? 0.0);
           LatLng startDes = pickUpLatLng.value == null ? curP : pickUpLng;
-          addPolyLines(
-              point, i, isSelectedGoTo.value == 0 ? 'driving' : 'walking');
+
+          listRouteSummery.sort((a, b) => a.minDist > b.minDist ? 1 : -1);
+          selectedRoute.value = listRouteSummery.first;
+
+          listRouteSummery.first.hazardPoint.forEach((key, data) {
+            final GeoPoint point = data['position']['geopoint'];
+            _addMarkerOnMap(LatLng(point.latitude, point.longitude),
+                getIconFromString(data['title']), '');
+          });
+
+          sortHazardPoints();
+
+          addPolyLines(listRouteSummery.first.path, 0,
+              isSelectedGoTo.value == 0 ? 'driving' : 'walking');
         }
-        listRouteSummery.sort((a, b) => a.minDist > b.minDist ? 1 : -1);
-        selectedRoute.value = listRouteSummery.first;
+
+        const id = MarkerId('Destination');
+        markers[id] = Marker(
+          markerId: id,
+          position: destLatLng.value!,
+          icon: BitmapDescriptor.defaultMarker,
+          infoWindow: InfoWindow(
+            title: 'Destination',
+            snippet: dropController.text,
+          ),
+        );
+        final BitmapDescriptor customIcon = await _getCustomIcon();
         if (isSelectedGoTo.value != 0) {
           extractCrossingsAlongRoute();
         }
-        _readAllMarkers();
       } else {
         log('Direction not found found');
       }
@@ -820,26 +844,13 @@ class HomeController extends GetxController {
           int diffTime =
               dateTime.millisecondsSinceEpoch ~/ 1000 - mTime.seconds;
 
-          bool isValid = false;
-          if (diffTime < 7200 || isPermanent) {
-            isValid = true;
-          } else if (stillThere > cleared) {
-            isValid = true;
-          } else {
-            // this is remove hazard marker on map from firebase
-
-            // _removeMarker(data);
-          }
-
-          if (distance < 0.05 && isValid) {
+          if (distance < 0.1) {
             hazards[data['position']['geohash']] = data;
-          } else {
-            // _addMarkerOnMap(LatLng(element.latitude, element.longitude), getIconFromString(data['title']));
           }
         }
       }
     }
-
+    print("HAZARD_POINTS=>${hazards}");
     listRouteSummery.add(RouteSummery(
         route: route,
         hazardPoint: hazards,
@@ -1409,6 +1420,8 @@ class HomeController extends GetxController {
         return icHospitalControl.value;
       case Pointers.PARK:
         return icParkControl.value;
+      case Pointers.CROSSING:
+        return icCrossing.value;
       case Pointers.DESTINATION:
         return BitmapDescriptor.defaultMarker;
       case Pointers.STARTLOCATION:
@@ -1440,6 +1453,8 @@ class HomeController extends GetxController {
 
     icHospitalControl.value = BitmapDescriptor.fromBytes(
         await getBytesFromAsset('assets/ic_hospital.png', 72));
+    icCrossing.value = BitmapDescriptor.fromBytes(
+        await getBytesFromAsset('assets/ic_crossing.png', 72));
     icParkControl.value = BitmapDescriptor.fromBytes(
         await getBytesFromAsset('assets/ic_park.png', 72));
 
@@ -1736,8 +1751,7 @@ class HomeController extends GetxController {
             markerId: MarkerId(id),
             position: crossingPoint,
             infoWindow: InfoWindow(title: "Pedestrian Crossing Along Route"),
-            icon:
-                BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+            icon: getIcon(Pointers.CROSSING),
           );
         }
       }
@@ -1924,67 +1938,4 @@ double distancePointToSegment(LatLng p, LatLng a, LatLng b) {
 
   // Conversion factor (1 degree ≈ 111.32 km)
   return distanceDegrees * 111.32;
-}
-
-Future<void> handleCameraReward(BuildContext context,
-    {required bool lookedLeft, required bool lookedRight}) async {
-  int reward = 0;
-  String finalMessage = "";
-  if (lookedLeft && lookedRight) {
-    reward = 10;
-    finalMessage =
-        "You looked both left and right. You have been rewarded 10 points!";
-  } else if (lookedLeft) {
-    reward = 5;
-    finalMessage =
-        "You looked left to see for vehicles. You have been partially rewarded 5 points!";
-  } else if (lookedRight) {
-    reward = 5;
-    finalMessage =
-        "You looked right for incoming vehicles. You have been partially rewarded 5 points!";
-  } else {
-    finalMessage = "You haven't looked left or right. No reward generated.";
-  }
-
-  // Show a dialog saying "Calculating rewards..." until the reward is updated.
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) {
-      return const AlertDialog(
-        title: Text("Reward"),
-        content: Text("Calculating rewards..."),
-      );
-    },
-  );
-
-  // --- Backend functionality disabled ---
-  // String userId = userLoginModel?.id.toString() ?? "defaultUserId";
-  // await FirebaseFirestore.instance.collection('reword').doc(userId).set({
-  //   "reward": reward,
-  //   "timestamp": DateTime.now().toIso8601String(),
-  // });
-  // ------------------------------------------
-
-  // Dismiss the "Calculating rewards..." dialog.
-  Navigator.of(context).pop();
-
-  // Show the final reward message.
-  showDialog(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        title: const Text("Reward"),
-        content: Text(finalMessage),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-            },
-            child: const Text("OK"),
-          )
-        ],
-      );
-    },
-  );
 }
