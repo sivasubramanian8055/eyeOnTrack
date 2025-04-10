@@ -94,9 +94,19 @@ class HomeView extends GetView<HomeController> {
                               heroTag: 'Profile',
                               onPressed: () =>
                                   Get.dialog(const ProfileDialog()),
-                              backgroundColor: Colors.white,
+                              backgroundColor: Colors.black,
                               child:
                                   const Icon(Icons.person, color: Colors.blue),
+                            ),
+                            const SizedBox(height: 10),
+                            FloatingActionButton(
+                              heroTag: 'recordedJourney',
+                              onPressed: () {
+                                controller.showJourneyHistory();
+                              },
+                              backgroundColor: Colors.black,
+                              child:
+                                  const Icon(Icons.history, color: Colors.blue),
                             ),
                             const SizedBox(height: 10),
                             FloatingActionButton(
@@ -107,16 +117,6 @@ class HomeView extends GetView<HomeController> {
                                 Icons.location_searching,
                                 color: Colors.blue,
                               ),
-                            ),
-                            const SizedBox(height: 10),
-                            FloatingActionButton(
-                              heroTag: 'recordedJourney',
-                              onPressed: () {
-                                controller.showJourneyHistory();
-                              },
-                              backgroundColor: Colors.white,
-                              child:
-                                  const Icon(Icons.history, color: Colors.blue),
                             ),
                           ],
                         ),

@@ -319,7 +319,6 @@ class HomeController extends GetxController {
           appController.currentPosition.value?.longitude ?? 0.0);
       double distance = calculateDistance(latLngCurrent, dest);
       radius = BehaviorSubject<double>.seeded(distance);
-      _readAllMarkers();
       final id = MarkerId(Pointers.DESTINATION.toString());
       String title = dropController.text.split(',').first;
       // THIS IS DESTINATION MARKER
@@ -391,7 +390,6 @@ class HomeController extends GetxController {
           calculateDistance(latLngPickLocation, latLngDropLocation);
       print("HAZARD_sHowing_Radius=>$distance");
       radius = BehaviorSubject<double>.seeded(distance);
-      _readAllMarkers();
       final id = MarkerId(Pointers.DESTINATION.toString());
       final pickId = MarkerId('STARTLOCATION');
       String title = dropController.text.split(',').first;
@@ -421,7 +419,7 @@ class HomeController extends GetxController {
   final showNotification = false.obs;
   final instruction = Rxn<String>();
   final isJourneyStarted = false.obs;
-  final isCameraActive = true.obs;
+  final isCameraActive = false.obs;
   VoidCallback? onTriggerRewardFromCamera;
   final isJourneyEnded = false.obs;
   final isReachedDest = false.obs;
@@ -549,6 +547,7 @@ class HomeController extends GetxController {
 
   Future<void> handleCameraReward(BuildContext context,
       {required bool lookedLeft, required bool lookedRight}) async {
+    print("in");
     print("LOOKED_LEFT=>${lookedLeft}, LOOKED_RIGHT=>${lookedRight}");
     totalAwarenessChecks.value++;
     if (lookedLeft && lookedRight) {
@@ -710,7 +709,7 @@ class HomeController extends GetxController {
         _updatePath(documentList);
         this.documentList = documentList;
         initDirectionService();
-        Timer(const Duration(seconds: 5), () => isInitDirectionEnable = true);
+        Timer(const Duration(seconds: 10), () => isInitDirectionEnable = true);
         EasyLoading.dismiss();
         isMapInitialized.value = true;
       },
@@ -782,6 +781,7 @@ class HomeController extends GetxController {
         if (isSelectedGoTo.value != 0) {
           extractCrossingsAlongRoute();
         }
+        _readAllMarkers();
       } else {
         log('Direction not found found');
       }
@@ -860,7 +860,7 @@ class HomeController extends GetxController {
         appController.currentPosition.value?.latitude ?? 0.0,
         appController.currentPosition.value?.latitude ?? 0.0);
     for (var element in hazardPointSorted) {
-      final GeoPoint point = element.hazardPoint['position']['geohash'];
+      final GeoPoint point = element.hazardPoint['position']['geopoint'];
       double distance = calculateDistance(
           isFixed.value ? startLatLong : latLngCurrent,
           LatLng(point.latitude, point.longitude));
@@ -1003,7 +1003,7 @@ class HomeController extends GetxController {
     _updateDestinationInfo();
     // Only when in walking mode
     if (isSelectedGoTo.value != 0) {
-      const double cameraActivationThreshold = 0.1; // 0.1 km = 100m
+      const double cameraActivationThreshold = 0.03; // 0.1 km = 100m
       bool isNearCrossing = false;
       LatLng currentPos = LatLng(
         appController.currentPosition.value?.latitude ?? 0.0,
@@ -1029,7 +1029,7 @@ class HomeController extends GetxController {
         print("Activating camera preview...");
         isCameraActive.value = true;
         print("isCameraActive (after setting true): ${isCameraActive.value}");
-        Timer(const Duration(seconds: 10), () {
+        Timer(const Duration(seconds: 5), () {
           isCameraActive.value = false;
           // Check that onTriggerRewardFromCamera is assigned to avoid errors.
           if (onTriggerRewardFromCamera != null) {
@@ -1076,7 +1076,7 @@ class HomeController extends GetxController {
     _sortHzPoints();
 
     HazardSorted hazardSorted = hazardPointSorted.first;
-    final GeoPoint point = hazardSorted.hazardPoint['position']['geohash'];
+    final GeoPoint point = hazardSorted.hazardPoint['position']['geopoint'];
     final String geoHash = hazardSorted.hazardPoint['position']['geohash'];
     LatLng hLng = LatLng(point.latitude, point.longitude);
     LatLng cLng = /*isFixed.value?startLatLong:*/ LatLng(
@@ -1105,7 +1105,7 @@ class HomeController extends GetxController {
 
     if (hInfoPoint.value != null) {
       final GeoPoint point =
-          hInfoPoint.value?.hazardPoint['position']['geohash'];
+          hInfoPoint.value?.hazardPoint['position']['geopoint'];
       LatLng hLng = LatLng(point.latitude, point.longitude);
       LatLng cLng = LatLng(appController.currentPosition.value?.latitude ?? 0.0,
           appController.currentPosition.value?.longitude ?? 0.0);

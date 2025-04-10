@@ -12,7 +12,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:get/get.dart';
-import 'python_channel.dart'; // Import the Python channel helper.
+import 'package:http/http.dart' as http; // <-- Import http for API calls
 import '../modules/controllers/home_controller.dart';
 
 // Create a global RouteObserver (if not already defined)
@@ -325,6 +325,7 @@ class EyeDisplayWidget extends StatelessWidget {
   }
 }
 
+/// A simple Debouncer to prevent too-frequent actions.
 class Debouncer {
   final Duration delay;
   VoidCallback? action;
@@ -332,20 +333,18 @@ class Debouncer {
 
   Debouncer({required this.delay});
 
-  /// Runs the [action] after the specified [delay]. Cancels any previous timer.
   void run(VoidCallback action) {
     _timer?.cancel();
     _timer = Timer(delay, action);
   }
 
-  /// Cancels the currently scheduled action.
   void cancel() {
     _timer?.cancel();
   }
 }
 
 /// ------------------------------
-/// FrontCameraPreview: Face Detection, Eye Extraction & Gaze via Face Orientation
+/// FrontCameraPreview: Face Detection, Eye Extraction & Gaze
 /// ------------------------------
 class FrontCameraPreview extends StatefulWidget {
   final VoidCallback onClose;
@@ -369,15 +368,24 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
       enableLandmarks: true,
     ),
   );
+
   String _text = '';
   final _cameraLensDirection = CameraLensDirection.front;
   Uint8List? _leftEyeBytes;
   Uint8List? _rightEyeBytes;
+
   bool _lookedLeft = false;
   bool _lookedRight = false;
   bool _rewardTriggered = false; // ensure reward is triggered only once
   Timer? _rewardTimer;
   DateTime? _lastProcessTime;
+
+  // -- ADDED: We'll store the results from the API in this array.
+  final List<String> _apiResults = [];
+  final List<Future> _pendingApiCalls = [];
+  // We'll ensure we only call the API once every X seconds:
+  DateTime? _lastStraightCallTime;
+  final Duration _straightCooldown = const Duration(seconds: 1);
 
   @override
   void initState() {
@@ -386,7 +394,6 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
     _text = widget.overlayText;
     final HomeController homeController = Get.find<HomeController>();
     homeController.onTriggerRewardFromCamera = _triggerReward;
-    // _startRewardTimer();
   }
 
   @override
@@ -397,7 +404,7 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
     super.dispose();
   }
 
-  /// Starts a timer that triggers reward after 10 seconds.
+  /// Optionally start a reward timer if you want an auto trigger. Disabled by default.
   void _startRewardTimer() {
     debugPrint("Starting reward timer.");
     _rewardTimer?.cancel();
@@ -409,23 +416,7 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
     });
   }
 
-  /// Triggers the reward by calling HomeController.handleCameraReward
-  /// and then pops this view to destroy the widget instance.
-  void _triggerReward() {
-    try {
-      // Ensure HomeController is registered with GetX (via Get.put(HomeController()) etc.)
-      HomeController controller = Get.find<HomeController>();
-      controller.handleCameraReward(
-        context,
-        lookedLeft: _lookedLeft,
-        lookedRight: _lookedRight,
-      );
-    } catch (e) {
-      debugPrint("Error triggering reward: $e");
-    }
-  }
-
-  // Convert NV21 bytes to RGB image using the image package.
+  /// Convert NV21 bytes to RGB using the image package.
   img.Image convertNV21ToRGB(Uint8List nv21Bytes, int width, int height) {
     final frameSize = width * height;
     final outImg = img.Image(width: width, height: height);
@@ -457,45 +448,81 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
     return outImg;
   }
 
-  /// Converts NV21 bytes to a JPEG-encoded image.
+  /// Convert NV21 to JPEG bytes
   Uint8List nv21ToJpeg(Uint8List nv21Bytes, int width, int height) {
     final rgbImage = convertNV21ToRGB(nv21Bytes, width, height);
-    return Uint8List.fromList(img.encodeJpg(rgbImage, quality: 85));
+    return Uint8List.fromList(img.encodeJpg(rgbImage, quality: 80));
   }
 
-  // Crop a 150x150 region centered at the given eye position.
-  img.Image cropEye(img.Image rgbImage, Point<double> eyePosition) {
-    final centerX = eyePosition.x.round();
-    final centerY = eyePosition.y.round();
-    int cropX = centerX - 75;
-    int cropY = centerY - 75;
-    cropX = cropX.clamp(0, rgbImage.width - 150);
-    cropY = cropY.clamp(0, rgbImage.height - 150);
-    return img.copyCrop(rgbImage, x: cropX, y: cropY, width: 150, height: 150);
+  /// Make the API call with the base64 of the JPEG image
+  Future<void> _callApiWithFrame(
+      Uint8List nv21Bytes, int width, int height) async {
+    try {
+      // 1) Convert to JPEG.
+      final jpegBytes = nv21ToJpeg(nv21Bytes, width, height);
+      final imgDecoded = img.decodeImage(jpegBytes);
+      if (imgDecoded != null) {
+        final rotated = img.copyRotate(imgDecoded, angle: 270);
+        final rotatedJpegBytes = Uint8List.fromList(img.encodeJpg(rotated));
+        final base64Image = base64Encode(rotatedJpegBytes);
+
+        // 2) POST to your endpoint.
+        final url = Uri.parse("https://gaze-latest.onrender.com/process_frame");
+
+        // Wrap the post call in a Future and add it to _pendingApiCalls.
+        final apiCall = http
+            .post(
+          url,
+          headers: {"Content-Type": "application/json"},
+          body: jsonEncode({
+            "image_data": base64Image,
+          }),
+        )
+            .then((response) {
+          if (response.statusCode == 200) {
+            // Suppose your server returns JSON like: { "result": "left" }
+            final data = jsonDecode(response.body);
+            final String result = data["result"]?.toString() ?? "unknown";
+            _apiResults.add(result);
+            debugPrint("API call success: $result");
+          } else {
+            debugPrint("API call failed. status=${response.statusCode}");
+          }
+        }).catchError((e) {
+          debugPrint("Error calling API: $e");
+        });
+
+        _pendingApiCalls.add(apiCall);
+        // Remove the call from pending when done.
+        apiCall.whenComplete(() {
+          _pendingApiCalls.remove(apiCall);
+        });
+      }
+    } catch (e) {
+      debugPrint("Error calling API: $e");
+    }
   }
 
-  // Face detection & gaze determination using face orientation (Euler Y).
+  /// Detect face & determine gaze
   Future<void> _processImage(InputImage inputImage, Uint8List nv21Bytes) async {
     final now = DateTime.now();
+    // Skip if we processed too recently
     if (_lastProcessTime != null &&
         now.difference(_lastProcessTime!) < const Duration(milliseconds: 500)) {
       return;
     }
     _lastProcessTime = now;
 
-    print('Starting face detection...');
     final faces = await _faceDetector.processImage(inputImage);
     setState(() {
       _text = faces.isNotEmpty ? 'Face detected' : 'No face detected';
     });
 
-    // If a face is detected, use its headEulerAngleY to decide gaze direction.
     if (faces.isNotEmpty) {
-      // For simplicity, use the first detected face.
       final face = faces.first;
       final eulerY = face.headEulerAngleY;
-      String gaze;
       if (eulerY != null) {
+        String gaze;
         if (eulerY > 10) {
           gaze = 'left';
           _lookedLeft = true;
@@ -505,120 +532,59 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
         } else {
           gaze = 'straight';
         }
-        setState(() {
-          _text = 'Looking $gaze';
-        });
+        setState(() => _text = 'Looking $gaze');
 
-        // When face is straight, sen
-        //d image to Python channel.
+        // If user is looking straight, we do the API call every _straightCooldown
         if (gaze == 'straight') {
-          debouncer.run(() async {
-            final int width = inputImage.metadata!.size.width.toInt();
-            final int height = inputImage.metadata!.size.height.toInt();
-            final jpegBytes = nv21ToJpeg(nv21Bytes, width, height);
-
-            // Optional: rotate if necessary (remove if not needed)
-            // For example, if the camera preview is rotated:
-            final imgDecoded = img.decodeImage(jpegBytes);
-            if (imgDecoded != null) {
-              final rotated = img.copyRotate(imgDecoded, angle: 270);
-              final rotatedJpegBytes =
-                  Uint8List.fromList(img.encodeJpg(rotated));
-
-              // Call Python channel with the rotated JPEG bytes.
-              final pythonResult =
-                  await PythonChannel.processStraightFrame(rotatedJpegBytes);
-              print("Python channel result: $pythonResult");
-
-              // Parse the JSON returned by Python.
-              try {
-                final Map<String, dynamic> resultMap = jsonDecode(pythonResult);
-                setState(() {
-                  _leftEyeBytes = base64Decode(resultMap["left_eye"] ?? "");
-                  _rightEyeBytes = base64Decode(resultMap["right_eye"] ?? "");
-                  _text = "Processed eyes received";
-                });
-              } catch (e) {
-                setState(() {
-                  _text = "Error parsing Python result: $e";
-                });
-              }
-            }
-          });
+          if (_lastStraightCallTime == null ||
+              now.difference(_lastStraightCallTime!) >= _straightCooldown) {
+            _lastStraightCallTime = now;
+            _callApiWithFrame(
+              nv21Bytes,
+              inputImage.metadata!.size.width.toInt(),
+              inputImage.metadata!.size.height.toInt(),
+            );
+          }
         }
       }
-    } else {
-      setState(() {
-        _text = "No face detected";
-      });
     }
   }
 
-  // This function determines the reward based on whether the user has looked left and/or right.
-  void _handleReward() async {
-    int reward = 0;
-    String finalMessage = "";
-    if (_lookedLeft && _lookedRight) {
-      reward = 10;
-      finalMessage =
-          "You looked both left and right. You have been rewarded 10 points!";
-    } else if (_lookedLeft) {
-      reward = 5;
-      finalMessage =
-          "You looked left to see for vehicles. You have been partially rewarded 5 points!";
-    } else if (_lookedRight) {
-      reward = 5;
-      finalMessage =
-          "You looked right for incoming vehicles. You have been partially rewarded 5 points!";
-    } else {
-      finalMessage = "You haven't looked left or right. No reward generated.";
+  /// Decide when to trigger reward
+  void _triggerReward() async {
+    if (_rewardTriggered) {
+      debugPrint("Reward has already been triggered.");
+      return;
     }
+    _rewardTriggered = true;
+    debugPrint("Triggering reward...");
 
-    // Show a dialog saying "Calculating rewards..." until the reward is updated.
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return const AlertDialog(
-          title: Text("Reward"),
-          content: Text("Calculating rewards..."),
-        );
-      },
-    );
+    // // Wait until all pending API calls complete.
+    // if (_pendingApiCalls.isNotEmpty) {
+    //   debugPrint(
+    //       "Waiting for pending API calls to complete before triggering reward.");
+    //   await Future.wait(_pendingApiCalls);
+    // }
+    // debugPrint("All pending API calls completed. Now handling reward.");
+    _handleReward();
+  }
 
-    // --- Backend functionality disabled ---
-    // String userId = userLoginModel?.id.toString() ?? "defaultUserId";
-    // await FirebaseFirestore.instance.collection('reword').doc(userId).set({
-    //   "reward": reward,
-    //   "timestamp": DateTime.now().toIso8601String(),
-    // });
-    // ------------------------------------------
+  /// Evaluate results
+  void _handleReward() async {
+    final HomeController homeController = Get.find<HomeController>();
 
-    // Dismiss the "Calculating rewards..." dialog.
-    Navigator.of(context).pop();
+    // Determine API detection results.
+    // (Note: In your code, "Gaze: right" is used to set apiSawLeft and vice versa.
+    // Adjust these as needed for your actual API response.)
+    bool apiSawLeft = _apiResults.contains("Gaze: right");
+    bool apiSawRight = _apiResults.contains("Gaze: left");
+    debugPrint(
+        "API results: $_apiResults, apiSawLeft: $apiSawLeft, apiSawRight: $apiSawRight");
 
-    // Show the final reward message.
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text("Reward"),
-          content: Text(finalMessage),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                // Reset the gaze flags.
-                setState(() {
-                  _lookedLeft = false;
-                  _lookedRight = false;
-                });
-              },
-              child: const Text("OK"),
-            )
-          ],
-        );
-      },
+    await homeController.handleCameraReward(
+      context,
+      lookedLeft: apiSawLeft || _lookedLeft,
+      lookedRight: apiSawRight || _lookedRight,
     );
   }
 
@@ -635,9 +601,8 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
               onImage: _processImage,
               initialCameraLensDirection: _cameraLensDirection,
               onClose: () {
-                if (!_rewardTriggered) {
-                  _triggerReward();
-                }
+                _triggerReward();
+                widget.onClose();
               },
               text: _text,
             ),
