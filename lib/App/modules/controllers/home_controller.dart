@@ -94,6 +94,9 @@ class HomeController extends GetxController {
   Rxn<DateTime> journeyStartTime = Rxn<DateTime>();
   Rxn<DateTime> journeyEndTime = Rxn<DateTime>();
 
+  // NEW: To prevent multiple triggers for the same crossing
+  LatLng? lastTriggeredCrossing;
+
   // This method initializes the pedometer subscription.
   void initializePedometer() async {
     bool granted = await _checkActivityRecognitionPermission();
@@ -236,7 +239,8 @@ class HomeController extends GetxController {
 
                 // Add the new route polyline to the map
                 addPolyLines(newRoutePoints, 0,
-                    isSelectedGoTo.value == 0 ? 'driving' : 'walking');
+                    movingMode:
+                        isSelectedGoTo.value == 0 ? 'driving' : 'walking');
                 if (isSelectedGoTo.value != 0) {
                   extractCrossingsAlongRoute();
                 }
@@ -333,10 +337,74 @@ class HomeController extends GetxController {
           snippet: dropController.text,
         ),
       );
-
+      // Trigger getDistanceUsingDirections for the selected route
+      if (selectedRoute.value != null && selectedRoute.value!.path.isNotEmpty) {
+        String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
+        getDistanceUsingDirections(selectedRoute.value!.path, mode)
+            .then((info) {
+          if (info != null) {
+            polylineInfo[PolylineId('polyline:0')] = info;
+            selectedPolylineInfo.value = {
+              "Distance": "${info['distance']['text']}",
+              "Time": "${info['duration']['text']}",
+              "Instructions": info['steps']
+            };
+            // Immediately show the instructions
+            _showDistanceTimeInfo(PolylineId('polyline:0'));
+          }
+          EasyLoading.dismiss();
+        });
+      } else {
+        EasyLoading.dismiss();
+      }
       //  _getNearbyPlaces();
     });
     pickUpLiner();
+  }
+
+  Polyline createRoutePolyline(List<LatLng> points, int index,
+      {bool isSelected = false, String movingMode = 'driving'}) {
+    PolylineId polylineId = PolylineId('polyline:$index');
+    Color polyColor =
+        isSelected ? Colors.blueAccent : Colors.blueAccent.withOpacity(0.4);
+    return Polyline(
+      polylineId: polylineId,
+      consumeTapEvents: true,
+      visible: true,
+      endCap: Cap.roundCap,
+      jointType: JointType.mitered,
+      width: 10,
+      geodesic: true,
+      points: points,
+      patterns: isSelectedGoTo.value == 0
+          ? []
+          : [PatternItem.dot, PatternItem.gap(10)],
+      zIndex: index,
+      color: polyColor,
+      onTap: () async {
+        if (!isJourneyStarted.value) {
+          selectedRoute.value = listRouteSummery[index];
+          updateRoutePolylines();
+          // Try to get polyline info. If not available, wait for its retrieval.
+          var info = polylineInfo[polylineId];
+          print("POLYLINE_ID=>$polylineId");
+          if (info == null) {
+            info = await getDistanceUsingDirections(points, movingMode);
+            if (info != null) {
+              polylineInfo[polylineId] = info;
+            }
+          }
+          if (info != null) {
+            selectedPolylineInfo.value = {
+              "Distance": "${info['distance']['text']}",
+              "Time": "${info['duration']['text']}",
+              "Instructions": info['steps']
+            };
+          }
+        }
+        _showDistanceTimeInfo(polylineId);
+      },
+    );
   }
 
   // New function to load the checkAwareness preference from Firestore.
@@ -488,32 +556,29 @@ class HomeController extends GetxController {
   final polylineInfo = {}.obs; // Store distance and time info for each polyline
   final selectedPolylineInfo =
       {}.obs; // Store distance and time info for each polyline
+  void addPolyLines(List<LatLng> points, int index,
+      {bool isSelected = false, String movingMode = 'driving'}) async {
+    PolylineId polylineId = PolylineId('polyline:$index');
+    double totalDistanceInKm = calculateDistance(points.first, points.last);
 
-  void addPolyLines(List<LatLng> point, int index, String movingMode) async {
-    PolylineId polylineId = PolylineId('polyline id:$index');
-    print(polylineId);
-    // var distanceTimeInfo = await getDistanceUsingDirections(point, movingMode);
-
-    // Calculate the total distance between the first and last points
-    double totalDistanceInKm = calculateDistance(point.first, point.last);
-
-    var distanceTimeInfo = await getDistanceUsingDirections(point, movingMode);
-
+    // Get distance & time info (if available)
+    var distanceTimeInfo = await getDistanceUsingDirections(points, movingMode);
     if (distanceTimeInfo != null) {
       polylineInfo[polylineId] = distanceTimeInfo;
-      if (index == 0) {
+      if (isSelected) {
+        selectedPolylineInfo.clear();
         selectedPolylineInfo.addAll({
           "Distance": "${distanceTimeInfo['distance']['text']}",
           "Time": "${distanceTimeInfo['duration']['text']}",
-          "Instructions": distanceTimeInfo[
-              'steps'] //List<String>.from(distanceTimeInfo['steps'])
+          "Instructions": distanceTimeInfo['steps']
         });
-        print(
-            "INITIAL_SELECTED_POLYLINE_INFO=>${selectedPolylineInfo.value['Instructions']}");
-      } else {}
+      }
     }
 
-    // Create the polyline with the desired properties
+    // Set polyline color based on whether it is selected.
+    Color polyColor =
+        isSelected ? Colors.blueAccent : Colors.blueAccent.withOpacity(0.4);
+
     Polyline polyline = Polyline(
       polylineId: polylineId,
       consumeTapEvents: true,
@@ -522,30 +587,91 @@ class HomeController extends GetxController {
       jointType: JointType.mitered,
       width: 10,
       geodesic: true,
-      points: /*totalDistanceInKm < 1?[curlt,destLatLng.value!] :*/ point,
+      points: points,
       patterns: isSelectedGoTo.value == 0
           ? []
           : [PatternItem.dot, PatternItem.gap(10)],
       zIndex: index,
-      color: totalDistanceInKm < 1
-          ? Colors.blueAccent
-          : index == isSelectedPolyLineIndex.value
-              ? Colors.blueAccent
-              : Colors.blueAccent.withOpacity(0.4),
+      color: polyColor,
       onTap: () {
-        print("POLYLINE_TAPPED_INDEX=>${index}");
-        _handlePolylineTap(index); // Handle the polyline tap
-        _showDistanceTimeInfo(polylineId); // Show distance and time information
+        // If journey is not started, allow tapping to change the selected route.
+        if (!isJourneyStarted.value) {
+          selectedRoute.value = listRouteSummery[index];
+          updateRoutePolylines();
+        }
+        _showDistanceTimeInfo(polylineId);
       },
     );
-    // Add the polyline to the map
-    if (totalDistanceInKm < 1) {
-      ployLines.clear();
-      print('NOPAS_POINTS=>${ployLines}');
-      // If the distance is within 1 km, skip waypoints and directly get the route
-    }
-    print("triggered poly");
+
     ployLines.add(polyline);
+  }
+
+  void updateRoutePolylines() {
+    // Build a new set for the route polylines only
+    Set<Polyline> newRoutePolylines = {};
+
+    if (isJourneyStarted.value) {
+      if (selectedRoute.value != null) {
+        // When journey is started, show only the selected route.
+        newRoutePolylines.add(createRoutePolyline(selectedRoute.value!.path, 0,
+            isSelected: true));
+      }
+    } else {
+      // Otherwise, show all alternative routes.
+      for (int i = 0; i < listRouteSummery.length; i++) {
+        print("LIST_ROUTE_SUMMERY=>${i}=>${listRouteSummery[i]}");
+        bool isSelected = (selectedRoute.value == listRouteSummery[i]);
+        newRoutePolylines.add(createRoutePolyline(listRouteSummery[i].path, i,
+            isSelected: isSelected,
+            movingMode: isSelectedGoTo.value == 0 ? 'driving' : 'walking'));
+      }
+    }
+
+    // Remove only those polylines that are from the route alternatives.
+    // This assumes all your route polylines have an id with prefix "polyline:".
+    ployLines.removeWhere((p) => p.polylineId.value.startsWith("polyline:"));
+
+    // Then add the new routes (selected + alternate).
+    ployLines.addAll(newRoutePolylines);
+
+    // Update hazard markers based on the currently selected route [or union of all route bounds if needed].
+    if (selectedRoute.value != null) {
+      updateMarkersForRoute(selectedRoute.value!.path);
+    }
+  }
+
+  void updateMarkersForRoute(List<LatLng> routePoints) {
+    // Remove previous hazard and crossing markers.
+    markers.removeWhere((markerId, marker) =>
+        marker.infoWindow.title == "Pedestrian Crossing Along Route" ||
+        (marker.infoWindow.title != null &&
+            marker.infoWindow.title!.toLowerCase().contains("hazard")));
+
+    // Update hazard markers from the document list if available.
+    if (documentList.isNotEmpty) {
+      const double hazardThresholdKm = 0.05;
+      for (var document in documentList) {
+        final data = document.data() as Map<String, dynamic>;
+        final GeoPoint gp = data['position']['geopoint'];
+        LatLng hazardLoc = LatLng(gp.latitude, gp.longitude);
+        bool isNearRoute = false;
+        for (int i = 0; i < routePoints.length - 1; i++) {
+          double d = distancePointToSegment(
+              hazardLoc, routePoints[i], routePoints[i + 1]);
+          if (d < hazardThresholdKm) {
+            isNearRoute = true;
+            break;
+          }
+        }
+        if (isNearRoute) {
+          _addMarkerOnMap(hazardLoc, getIconFromString(data['title']), "");
+        }
+      }
+    }
+
+    // Also update pedestrian crossing markers.
+    extractCrossingsAlongRoute(routePoints);
+    sortHazardPoints();
   }
 
   Future<void> handleCameraReward(BuildContext context,
@@ -635,6 +761,7 @@ class HomeController extends GetxController {
   }
 
   void _showDistanceTimeInfo(PolylineId polylineId) {
+    print("SELECTED_POLYLINE_ID=>${polylineId}");
     var info = polylineInfo[polylineId];
     if (info != null) {
       print(
@@ -736,14 +863,18 @@ class HomeController extends GetxController {
     if (!isInitDirectionEnable) return;
     if (destLatLng.value == null) return;
     isInitDirectionEnable = false;
+
+    // Clear previous route summaries and overlays.
     listRouteSummery.clear();
     ployLines.clear();
-    selectedPolylineInfo.value.clear();
+    selectedPolylineInfo.clear();
     markers.clear();
+
+    // Reset additional state as needed.
+    notificationStatus.clear();
     currentHazardIndex = 0;
     selectedStep = 0;
     currentIndex = 0;
-    notificationStatus.clear();
 
     String pickUpLocation =
         '${pickUpLatLng.value?.latitude},${pickUpLatLng.value?.longitude}';
@@ -762,52 +893,63 @@ class HomeController extends GetxController {
 
     directionsService.route(request,
         (DirectionsResult response, DirectionsStatus? status) async {
-      if (status == DirectionsStatus.ok) {
+      if (status == DirectionsStatus.ok &&
+          response.routes != null &&
+          response.routes!.isNotEmpty) {
         directionResponse.value = response;
-        int len = response.routes?.length ?? 0;
-        for (int i = 0; i < len; i++) {
-          DirectionsRoute element = response.routes!.elementAt(i);
-          List<LatLng> point = convertToLatLng(
-              element, decodePoly(element.overviewPolyline!.points!));
+        listRouteSummery.clear();
+        for (int i = 0; i < response.routes!.length; i++) {
+          print("ROUTE_SUMMERY=>${i}=>${response.routes![i]}");
+          DirectionsRoute route = response.routes!.elementAt(i);
+          List<LatLng> routePoints = convertToLatLng(
+              route, decodePoly(route.overviewPolyline!.points!));
+          listRouteSummery.add(RouteSummery(
+              route: route,
+              hazardPoint: {},
+              minDist: routePoints.length,
+              path: routePoints));
+        }
+        // Select a default route, for example the first one.
+        selectedRoute.value = listRouteSummery.first;
 
-          LatLng curP = LatLng(
-              appController.currentPosition.value?.latitude ?? 0.0,
-              appController.currentPosition.value?.longitude ?? 0.0);
-          LatLng pickUpLng = LatLng(pickUpLatLng.value?.latitude ?? 0.0,
-              pickUpLatLng.value?.longitude ?? 0.0);
-          LatLng startDes = pickUpLatLng.value == null ? curP : pickUpLng;
+        // Update all route polylines (blue for selected, lighter blue for alternate)
+        updateRoutePolylines();
 
-          listRouteSummery.sort((a, b) => a.minDist > b.minDist ? 1 : -1);
-          selectedRoute.value = listRouteSummery.first;
-
-          listRouteSummery.first.hazardPoint.forEach((key, data) {
-            final GeoPoint point = data['position']['geopoint'];
-            _addMarkerOnMap(LatLng(point.latitude, point.longitude),
-                getIconFromString(data['title']), '');
-          });
-
-          sortHazardPoints();
-
-          addPolyLines(listRouteSummery.first.path, 0,
-              isSelectedGoTo.value == 0 ? 'driving' : 'walking');
+        if (selectedRoute.value != null) {
+          if (destLatLng.value != null &&
+              selectedRoute.value!.path.isNotEmpty) {
+            String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
+            getDistanceUsingDirections(selectedRoute.value!.path, mode)
+                .then((info) {
+              if (info != null) {
+                polylineInfo[PolylineId('polyline:0')] = info;
+                selectedPolylineInfo.value = {
+                  "Distance": "${info['distance']['text']}",
+                  "Time": "${info['duration']['text']}",
+                  "Instructions": info['steps']
+                };
+                _showDistanceTimeInfo(PolylineId('polyline:0'));
+              }
+            });
+          }
         }
 
-        const id = MarkerId('Destination');
+        // Destination marker and other markers can be added normally.
+        final id = MarkerId(Pointers.DESTINATION.toString());
         markers[id] = Marker(
           markerId: id,
           position: destLatLng.value!,
           icon: BitmapDescriptor.defaultMarker,
           infoWindow: InfoWindow(
-            title: 'Destination',
+            title: dropController.text.split(',').first,
             snippet: dropController.text,
           ),
         );
-        final BitmapDescriptor customIcon = await _getCustomIcon();
         if (isSelectedGoTo.value != 0) {
           extractCrossingsAlongRoute();
         }
       } else {
-        log('Direction not found found');
+        log('Direction service failed: $status');
       }
     });
   }
@@ -904,47 +1046,6 @@ class HomeController extends GetxController {
 
   final walkingTime = 'Calculating...'.obs;
 
-/*
-  _updateSpeed(Position? position) {
-    String destination = '3.5 km';
-    double distanceKm = 3.5; // Distance in kilometers
-    double mSpeed = position?.speed ?? 0.0;
-    mSpeed = mSpeed < 0 ? 0.0 : mSpeed;
-
-    double speedKmh = mSpeed >= 1.0
-        ? mSpeed * (18 / 5)
-        : mSpeed * 3.6; // Convert speed to km/h if needed
-
-    double? timeHours; // Variable to store the time
-    String timeFormatted = 'Calculating...'; // Default value for formatted time
-
-    if (speedKmh > 0) {
-      timeHours = distanceKm / speedKmh; // Time in hours
-
-      int hours = timeHours.floor(); // Get the whole number of hours
-      int minutes =
-          ((timeHours - hours) * 60).round(); // Get the remaining minutes
-
-      // walkingTime.value = '${hours}h:${minutes}m'; // Format as hours and minutes
-    }
-
-    if (speedKmh > 0) {
-      speed.value =
-          '${speedKmh.toStringAsFixed(2)} KM/H\nEstimated Time: $timeFormatted';
-    } else {
-      if (mSpeed >= 1.0) {
-        speed.value = '${(mSpeed * (18 / 5)).toStringAsFixed(2)} KM/H';
-      } else {
-        print('SPEED_FOR_YOUR_WALKING=>${mSpeed.toStringAsFixed(2)} m/s');
-        speed.value = '${mSpeed.toStringAsFixed(2)} m/s';
-      }
-    }
-
-    // Optionally, you can use the formatted time elsewhere
-    print('Formatted Time: $timeFormatted');
-  }
-*/
-
   _updateNavigation() async {
     LatLng? lng = isFixed.value
         ? startLatLong
@@ -1014,35 +1115,40 @@ class HomeController extends GetxController {
     _updateDestinationInfo();
     // Only when in walking mode
     if (isSelectedGoTo.value != 0) {
-      const double cameraActivationThreshold = 0.03; // 0.1 km = 100m
-      bool isNearCrossing = false;
+      const double cameraActivationThreshold = 0.02; // e.g. 30 meters
       LatLng currentPos = LatLng(
-        appController.currentPosition.value?.latitude ?? 0.0,
-        appController.currentPosition.value?.longitude ?? 0.0,
-      );
+          appController.currentPosition.value?.latitude ?? 0.0,
+          appController.currentPosition.value?.longitude ?? 0.0);
 
-      // Check if any crossing along route is within threshold.
+      // Find the nearest crossing along the route.
+      LatLng? nearestCrossing;
+      double minDist = double.maxFinite;
       for (LatLng crossing in crossingsAlongRoute) {
-        double dist = calculateDistance(currentPos, crossing);
-        if (dist < cameraActivationThreshold) {
-          isNearCrossing = true;
-          break;
+        double d = calculateDistance(currentPos, crossing);
+        if (d < minDist) {
+          minDist = d;
+          nearestCrossing = crossing;
         }
       }
 
-      // Debug prints to verify conditions.
-      print("checkAwareness: ${checkAwareness.value}");
-      print("isNearCrossing: $isNearCrossing");
-      print("isCameraActive (before): ${isCameraActive.value}");
+      // Reset trigger if no crossing is nearby.
+      if (nearestCrossing == null || minDist >= cameraActivationThreshold) {
+        lastTriggeredCrossing = null;
+      }
 
-      // Activate camera preview if conditions are met.
-      if (checkAwareness.value && isNearCrossing && !isCameraActive.value) {
+      // Trigger camera preview only if conditions are met and not already triggered for the same crossing.
+      if (checkAwareness.value &&
+          nearestCrossing != null &&
+          minDist < cameraActivationThreshold &&
+          (lastTriggeredCrossing == null ||
+              calculateDistance(nearestCrossing, lastTriggeredCrossing!) >
+                  cameraActivationThreshold) &&
+          !isCameraActive.value) {
         print("Activating camera preview...");
         isCameraActive.value = true;
-        print("isCameraActive (after setting true): ${isCameraActive.value}");
-        Timer(const Duration(seconds: 5), () {
+        lastTriggeredCrossing = nearestCrossing;
+        Timer(const Duration(seconds: 10), () {
           isCameraActive.value = false;
-          // Check that onTriggerRewardFromCamera is assigned to avoid errors.
           if (onTriggerRewardFromCamera != null) {
             onTriggerRewardFromCamera!();
           }
@@ -1530,6 +1636,104 @@ class HomeController extends GetxController {
     );
   }
 
+  void redirectToSafeRoute() async {
+    // Ensure that destination is set.
+    if (destLatLng.value == null) {
+      EasyLoading.showToast("Destination not available");
+      return;
+    }
+    // Use current location if pickUpLatLng is null.
+    String originLocation = "";
+    if (pickUpLatLng.value == null) {
+      if (appController.currentPosition.value == null) {
+        EasyLoading.showToast("Current location not available");
+        return;
+      }
+      originLocation =
+          '${appController.currentPosition.value!.latitude},${appController.currentPosition.value!.longitude}';
+    } else {
+      originLocation =
+          '${pickUpLatLng.value!.latitude},${pickUpLatLng.value!.longitude}';
+    }
+
+    // Ensure we have hazard info available
+    if (hInfoPoint.value == null) {
+      EasyLoading.showToast("No hazard info available");
+      return;
+    }
+    // Check that hazard info has the required fields.
+    var hazardData = hInfoPoint.value!.hazardPoint;
+    if (hazardData == null ||
+        hazardData['position'] == null ||
+        hazardData['position']['geopoint'] == null) {
+      EasyLoading.showToast("Incomplete hazard info");
+      return;
+    }
+
+    // Get the hazard coordinate from the hazard info.
+    final GeoPoint hazardGeo = hazardData['position']['geopoint'];
+    LatLng hazardLatLng = LatLng(hazardGeo.latitude, hazardGeo.longitude);
+
+    // Compute a safe waypoint by offsetting the hazard location.
+    const double offset = 0.005; // roughly a few hundred meters offset
+    LatLng safeWaypoint =
+        LatLng(hazardLatLng.latitude + offset, hazardLatLng.longitude + offset);
+    print("SAFE_WAYPOINT => ${safeWaypoint}");
+
+    // Create a new directions request with the safe waypoint.
+    final request = DirectionsRequest(
+      origin: originLocation,
+      destination:
+          '${destLatLng.value!.latitude},${destLatLng.value!.longitude}',
+      waypoints: [
+        DirectionsWaypoint(
+            location: '${safeWaypoint.latitude},${safeWaypoint.longitude}')
+      ],
+      alternatives: false,
+      travelMode:
+          isSelectedGoTo.value == 0 ? TravelMode.driving : TravelMode.walking,
+      unitSystem: UnitSystem.imperial,
+    );
+    print("REQUEST => ${request}");
+
+    // Request directions with the safe waypoint.
+    directionsService.route(request,
+        (DirectionsResult response, DirectionsStatus? status) async {
+      if (status == DirectionsStatus.ok &&
+          response.routes != null &&
+          response.routes!.isNotEmpty) {
+        DirectionsRoute newRoute = response.routes!.first;
+        List<LatLng> newRoutePoints = convertToLatLng(
+            newRoute, decodePoly(newRoute.overviewPolyline!.points!));
+
+        // Update the selected route entirely with the new safe route.
+        selectedRoute.value = RouteSummery(
+          route: newRoute,
+          hazardPoint: {}, // assume safe route has no hazards
+          minDist: newRoutePoints.length,
+          path: newRoutePoints,
+        );
+        print("NEW_ROUTE_POINTS => ${newRoutePoints}");
+        updateRoutePolylines();
+
+        // Update distance, time, and instruction information.
+        String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
+        var info = await getDistanceUsingDirections(newRoutePoints, mode);
+        if (info != null) {
+          polylineInfo[PolylineId('polyline:0')] = info;
+          selectedPolylineInfo.value = {
+            "Distance": "${info['distance']['text']}",
+            "Time": "${info['duration']['text']}",
+            "Instructions": info['steps']
+          };
+          _showDistanceTimeInfo(PolylineId('polyline:0'));
+        }
+      } else {
+        EasyLoading.showToast("Failed to compute a safe route");
+      }
+    });
+  }
+
   _showHazardDialogAndAddCoin(data) {
     if (data['message'].toString() == 'Construction Work Ahead') {
       if (!notShowConstructionReword.value) {
@@ -1540,27 +1744,27 @@ class HomeController extends GetxController {
     }
 
     if (userLoginModel!.loginType.toString() == 'auth') {
-      if (data['message'].toString() == 'Construction Work Ahead') {
-        Future.delayed(const Duration(seconds: 5), () {
-          if (!notShowConstructionReword.value) {
-            Get.back();
-            Get.dialog(
-                barrierColor: Colors.transparent,
-                ConstructionFollowHazardRewordDialog(data: data));
-            addLeaderboardReword(data);
-          }
-          notShowConstructionReword.value = false;
-        });
-      } else if (data['message'].toString() == 'Pedestrian Crossing Ahead') {
-        Get.to(() => const CameraView());
-        Future.delayed(const Duration(seconds: 5), () {
-          Get.back();
-          Get.dialog(
-              barrierColor: Colors.transparent,
-              const RouteFollowRewordDialog());
-          addLeaderboardReword(data);
-        });
-      }
+      // if (data['message'].toString() == 'Construction Work Ahead') {
+      //   Future.delayed(const Duration(seconds: 5), () {
+      //     if (!notShowConstructionReword.value) {
+      //       Get.back();
+      //       Get.dialog(
+      //           barrierColor: Colors.transparent,
+      //           ConstructionFollowHazardRewordDialog(data: data));
+      //       addLeaderboardReword(data);
+      //     }
+      //     notShowConstructionReword.value = false;
+      //   });
+      // } else if (data['message'].toString() == 'Pedestrian Crossing Ahead') {
+      //   Get.to(() => const CameraView());
+      //   Future.delayed(const Duration(seconds: 5), () {
+      //     Get.back();
+      //     Get.dialog(
+      //         barrierColor: Colors.transparent,
+      //         const RouteFollowRewordDialog());
+      //     addLeaderboardReword(data);
+      //   });
+      // }
       // for all type hazard dash bord coins
       addDashboardReword(data);
     } else {
@@ -1808,8 +2012,7 @@ class HomeController extends GetxController {
     // Clear previous polyline(s) then display the route.
     ployLines.clear();
     String movingMode = mode == 0 ? 'driving' : 'walking';
-
-    addPolyLines(journeyPoints, 0, movingMode);
+    addPolyLines(journeyPoints, 0, movingMode: movingMode);
     // Fetch and update distance, duration, and step instructions.
     var distanceTimeInfo =
         await getDistanceUsingDirections(journeyPoints, movingMode);
@@ -1826,15 +2029,40 @@ class HomeController extends GetxController {
     }
   }
 
-  // Call this method to start a new journey.
   void startJourney() {
-    recordedJourney.clear(); // Clear any previously recorded route
+    // Check if there is a selected route and if it contains hazards.
+    print("Safe Routes: ${listRouteSummery.length}");
+    if (selectedRoute.value != null &&
+        selectedRoute.value!.hazardPoint.isNotEmpty) {
+      // Prompt the user about the hazard on the selected route.
+      Get.defaultDialog(
+        title: 'Hazard Detected',
+        middleText:
+            'The path you have selected has hazards. Do you wish to proceed?',
+        textConfirm: 'Proceed',
+        textCancel: 'Select Safe Route',
+        onConfirm: () {
+          // Deduct 5 coins here if necessary.
+          _continueStartJourney();
+          Get.back();
+        },
+        onCancel: () {
+          Get.back();
+        },
+      );
+      return;
+    }
+    // If no hazards are present or no safe alternative exists, continue.
+    _continueStartJourney();
+  }
+
+  // Call this method to start a new journey.
+  void _continueStartJourney() {
+    recordedJourney.clear(); // Clear any previously recorded route.
     isJourneyStarted.value = true;
-    journeyStartStepCount =
-        stepCount.value; // Record current steps at journey start
+    journeyStartStepCount = stepCount.value; // Record steps at start.
     journeyStartTime.value = DateTime.now();
-    recordedJourneyMode.value =
-        isSelectedGoTo.value; // Save the mode (0 => driving, 1 => walking)
+    recordedJourneyMode.value = isSelectedGoTo.value; // Save the mode.
     print(
         "Journey started at ${journeyStartTime.value} with mode ${recordedJourneyMode.value}");
   }

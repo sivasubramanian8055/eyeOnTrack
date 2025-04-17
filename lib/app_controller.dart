@@ -3,8 +3,8 @@ import 'package:get/get.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'App/helper/app_strings.dart';
-class AppController extends GetxController{
 
+class AppController extends GetxController {
   final currentPosition = Rxn<Position>();
   final initialLatLon = Rxn<LatLng>();
   final travelZoom = 18.0;
@@ -15,12 +15,12 @@ class AppController extends GetxController{
   final soundAlert = true.obs;
   final wakeLock = true.obs;
   final speedAlert = true.obs;
-  final radarRadius = 5.0.obs;
+  final radarRadius = 3.0.obs;
 
   @override
   void onInit() {
     super.onInit();
-    _determinePosition().then((value){
+    _determinePosition().then((value) {
       // log('${value?.latitude}, ${value?.longitude}');
     });
     _getAppSettings();
@@ -46,8 +46,8 @@ class AppController extends GetxController{
     }
 
     if (permission == LocationPermission.deniedForever) {
-
-      return Future.error('Location permissions are permanently denied, we cannot request permissions.');
+      return Future.error(
+          'Location permissions are permanently denied, we cannot request permissions.');
     }
 
     currentPosition.value = await Geolocator.getCurrentPosition();
@@ -56,25 +56,25 @@ class AppController extends GetxController{
     return currentPosition.value;
   }
 
-  void listenCurrentValues(){
-
+  void listenCurrentValues() {
     const LocationSettings locationSettings = LocationSettings(
       accuracy: LocationAccuracy.best,
-       distanceFilter: 10,
+      distanceFilter: 10,
     );
 
-    Geolocator.getPositionStream(locationSettings: locationSettings).listen((event) {
+    Geolocator.getPositionStream(locationSettings: locationSettings)
+        .listen((event) {
       currentPosition.value = event;
     });
   }
 
-  _getAppSettings()async{
+  _getAppSettings() async {
     SharedPreferences preferences = await SharedPreferences.getInstance();
-    soundAlert.value = preferences.getBool(KEY_SOUND)??true;
+    soundAlert.value = preferences.getBool(KEY_SOUND) ?? true;
     // notificationAlert.value = preferences.getBool(KEY_NOTIF)??true;
-    speedAlert.value = preferences.getBool(KEY_SPEED)??true;
-    radarRadius.value = preferences.getDouble(KEY_RADIUS)??5.0;
-    wakeLock.value = preferences.getBool(KEY_WAKELOCK)??true;
+    speedAlert.value = preferences.getBool(KEY_SPEED) ?? true;
+    radarRadius.value = preferences.getDouble(KEY_RADIUS) ?? 3.0;
+    wakeLock.value = preferences.getBool(KEY_WAKELOCK) ?? true;
 
     soundAlert.listen((value) {
       preferences.setBool(KEY_SOUND, value);
@@ -87,8 +87,7 @@ class AppController extends GetxController{
     wakeLock.listen((value) {
       preferences.setBool(KEY_WAKELOCK, value);
 
-     // Wakelock.toggle(enable: value);
-
+      // Wakelock.toggle(enable: value);
     });
 
     speedAlert.listen((value) {
@@ -98,7 +97,6 @@ class AppController extends GetxController{
     radarRadius.listen((value) {
       preferences.setDouble(KEY_RADIUS, value);
     });
-
   }
 
   @override
@@ -106,7 +104,8 @@ class AppController extends GetxController{
     super.onClose();
   }
 }
-class AppBinding extends Bindings{
+
+class AppBinding extends Bindings {
   @override
   void dependencies() {
     // TODO: implement dependencies
