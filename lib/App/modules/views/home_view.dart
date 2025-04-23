@@ -187,7 +187,7 @@ class HomeView extends GetView<HomeController> {
                       height: 43,
                       margin: const EdgeInsets.only(top: 10, right: 10),
                       child: PlaceSearchFieldView(
-                        //focusNode: currentFocus,
+                        focusNode: controller.pickupFocus,
                         readOnly: controller.isFixed.value,
                         boxDecoration: const BoxDecoration(),
                         textEditingController: controller.pickupController,
@@ -231,6 +231,7 @@ class HomeView extends GetView<HomeController> {
                       height: 43,
                       margin: EdgeInsets.only(top: 5, right: 10),
                       child: PlaceSearchFieldView(
+                        focusNode: controller.dropFocus,
                         readOnly: controller.isFixed.value,
                         onChanged: (String value) {
                           if (value.toString() == '') {
@@ -476,15 +477,7 @@ class HomeView extends GetView<HomeController> {
                                                           .primaryColor,
                                                       onPressed: () {
                                                         controller
-                                                                .isJourneyStarted
-                                                                .value =
-                                                            !controller
-                                                                .isJourneyStarted
-                                                                .value;
-                                                        controller
                                                             .startJourney();
-                                                        controller
-                                                            .recenterCamera();
                                                       },
                                                       child: Row(
                                                         mainAxisSize:

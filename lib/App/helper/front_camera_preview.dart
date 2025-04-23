@@ -467,7 +467,7 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
         final base64Image = base64Encode(rotatedJpegBytes);
 
         // 2) POST to your endpoint.
-        final url = Uri.parse("https://gaze-latest.onrender.com/process_frame");
+        final url = Uri.parse("https://persuasive.research.cs.dal.ca/eyesontrack/api");
 
         // Wrap the post call in a Future and add it to _pendingApiCalls.
         final apiCall = http

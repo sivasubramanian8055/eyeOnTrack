@@ -15,7 +15,7 @@ class AppController extends GetxController {
   final soundAlert = true.obs;
   final wakeLock = true.obs;
   final speedAlert = true.obs;
-  final radarRadius = 3.0.obs;
+  final radarRadius = 5.0.obs;
 
   @override
   void onInit() {
