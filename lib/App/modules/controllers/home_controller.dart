@@ -653,6 +653,7 @@ class HomeController extends GetxController {
             marker.infoWindow.title!.toLowerCase().contains("hazard")));
 
     // Update hazard markers from the document list if available.
+    Map<String, dynamic> updatedHazardPoints = {};
     if (documentList.isNotEmpty) {
       const double hazardThresholdKm = 0.05;
       for (var document in documentList) {
@@ -669,11 +670,14 @@ class HomeController extends GetxController {
           }
         }
         if (isNearRoute) {
+          updatedHazardPoints[data['position']['geohash']] = data;
           _addMarkerOnMap(hazardLoc, getIconFromString(data['title']), "");
         }
       }
     }
-
+    if (selectedRoute.value != null) {
+      selectedRoute.value!.hazardPoint = updatedHazardPoints;
+    }
     // Also update pedestrian crossing markers.
     extractCrossingsAlongRoute(routePoints);
     sortHazardPoints();
@@ -997,7 +1001,6 @@ class HomeController extends GetxController {
         }
       }
     }
-    print("HAZARD_POINTS=>${hazards}");
     listRouteSummery.add(RouteSummery(
         route: route,
         hazardPoint: hazards,
@@ -1192,6 +1195,7 @@ class HomeController extends GetxController {
 
   _updateHazardInfo() {
     if (hazardPointSorted.isEmpty) {
+      print("HAZARD_POINTS_IS_EMPTY=>${hazardPointSorted.length}");
       showNotification.value = false;
       return;
     }
@@ -1205,11 +1209,13 @@ class HomeController extends GetxController {
         appController.currentPosition.value?.latitude ?? 0.0,
         appController.currentPosition.value?.longitude ?? 0.0);
     double distance = calculateDistance(cLng, hLng);
-    print("DISTENCE_FOR_HAZARD=>${distance}");
-    // log('${hazardPointSorted.length}, $currentHazardIndex, $distance, ${notificationStatus[geoHash]}, ${showNotification.value}');
-    if (distance < 0.06 &&
+    print("distance: $distance");
+    print("notifstat ${showNotification.value}");
+    print("notifgeo ${notificationStatus[geoHash]}");
+    if ((distance > 0.01 && distance < 0.07) &&
         (notificationStatus[geoHash] ?? true) &&
         !showNotification.value) {
+      print("HAZARD_POINTS_ADD=>${hazardPointSorted.length}");
       hInfoPoint.value = hazardSorted;
       hInfoPoint.value?.distance = distance;
       measureDistance = distance;
@@ -1226,28 +1232,18 @@ class HomeController extends GetxController {
     }
 
     if (hInfoPoint.value != null) {
-      final GeoPoint point =
-          hInfoPoint.value?.hazardPoint['position']['geopoint'];
-      LatLng hLng = LatLng(point.latitude, point.longitude);
-      LatLng cLng = LatLng(appController.currentPosition.value?.latitude ?? 0.0,
-          appController.currentPosition.value?.longitude ?? 0.0);
-      double distance = calculateDistance(cLng, hLng);
-      hInfoPoint.value?.distance = distance;
-      hazardDistance.value = distance >= 1
-          ? '${distance.toStringAsFixed(2)} KM'
-          : '${(distance * 1000).toStringAsFixed(0)}Meter';
-      log('minRadarRadius $minRadarRadius, distance $distance, ${minRadarRadius - distance}');
       print("Distence_${hazardDistance.value}");
-      if (distance < 0.06) {
+      if (distance > 0.01 && distance < 0.07) {
         showNotification.value = false;
         hazardPointSorted.remove(hazardSorted);
+        print("HAZARD_POINTS_Remove=>${hazardPointSorted.length}");
         notificationStatus[geoHash] = false;
       }
     }
   }
 
   _updateDestinationInfo() {
-    //  var geocoder =  google.maps.Geocoder();
+    //  var geocoder =  google.maps.Genotifocoder();
     LatLng cLng = LatLng(appController.currentPosition.value?.latitude ?? 0.0,
         appController.currentPosition.value?.longitude ?? 0.0);
     LatLng pickUpLng = LatLng(pickUpLatLng.value?.latitude ?? 0.0,
@@ -1642,14 +1638,13 @@ class HomeController extends GetxController {
   }
 
   void redirectToSafeRoute() async {
-    // Ensure that destination is set.
     if (destLatLng.value == null) {
       EasyLoading.showToast("Destination not available");
       return;
     }
 
-    // Use current location if pickUpLatLng is null.
-    String originLocation = "";
+    // Determine origin location.
+    String originLocation;
     if (pickUpLatLng.value == null) {
       if (appController.currentPosition.value == null) {
         EasyLoading.showToast("Current location not available");
@@ -1661,10 +1656,8 @@ class HomeController extends GetxController {
       originLocation =
           '${pickUpLatLng.value!.latitude},${pickUpLatLng.value!.longitude}';
     }
-    String destinationLocation =
-        '${destLatLng.value!.latitude},${destLatLng.value!.longitude}';
 
-    // Ensure we have hazard info available.
+    // Ensure hazard info is available.
     if (hInfoPoint.value == null) {
       EasyLoading.showToast("No hazard info available");
       return;
@@ -1679,35 +1672,45 @@ class HomeController extends GetxController {
     final GeoPoint hazardGeo = hazardData['position']['geopoint'];
     LatLng hazardLatLng = LatLng(hazardGeo.latitude, hazardGeo.longitude);
 
-    // Define three candidate waypoints relative to the hazard:
-    // left: shift west; right: shift east; back: shift south.
-    const double offset = 0.8; // roughly a few hundred meters offset
-    LatLng waypointLeft =
-        LatLng(hazardLatLng.latitude, hazardLatLng.longitude - offset);
-    LatLng waypointRight =
-        LatLng(hazardLatLng.latitude, hazardLatLng.longitude + offset);
-    LatLng waypointBack =
-        LatLng(hazardLatLng.latitude - offset, hazardLatLng.longitude);
-
-    String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
-    const double hazardSafetyBuffer =
-        0.05; // route segments closer than ~50 meters are not allowed
-
-    // Helper: Snap a waypoint to a road (currently dummy implementation).
-    Future<LatLng> snapToRoad(LatLng point) async {
-      // TODO: Integrate with the Google Roads API.
-      return point;
+    // Calculate a normalized vector from the hazard to the destination.
+    LatLng dest = destLatLng.value!;
+    double dLat = dest.latitude - hazardLatLng.latitude;
+    double dLng = dest.longitude - hazardLatLng.longitude;
+    double length = sqrt(dLat * dLat + dLng * dLng);
+    if (length == 0) {
+      EasyLoading.showToast("Invalid hazard-to-destination vector");
+      return;
     }
+    double nLat = dLat / length;
+    double nLng = dLng / length;
 
-    // Helper: Get a route for a candidate (or snapped) waypoint making sure none of its segments come near the hazard.
-    Future<Map<String, dynamic>?> getRouteForWaypoint(LatLng waypoint) {
-      Completer<Map<String, dynamic>?> completer = Completer();
+    // Offset value (in km) to create candidate waypoints (about a few hundred meters).
+    const double offset = 0.005;
+
+    // Calculate three candidate waypoints around the hazard.
+    LatLng behindWaypoint = LatLng(
+      hazardLatLng.latitude - nLat * offset,
+      hazardLatLng.longitude - nLng * offset,
+    );
+    LatLng leftWaypoint = LatLng(
+      hazardLatLng.latitude + nLng * offset,
+      hazardLatLng.longitude - nLat * offset,
+    );
+    LatLng rightWaypoint = LatLng(
+      hazardLatLng.latitude - nLng * offset,
+      hazardLatLng.longitude + nLat * offset,
+    );
+
+    // Helper function: fetch a route for a given waypoint.
+    Future<DirectionsRoute?> fetchRouteForWaypoint(LatLng waypoint) {
+      final completer = Completer<DirectionsRoute?>();
       final request = DirectionsRequest(
         origin: originLocation,
-        destination: destinationLocation,
+        destination: '${dest.latitude},${dest.longitude}',
         waypoints: [
           DirectionsWaypoint(
-              location: '${waypoint.latitude},${waypoint.longitude}')
+            location: '${waypoint.latitude},${waypoint.longitude}',
+          )
         ],
         alternatives: false,
         travelMode:
@@ -1719,95 +1722,7 @@ class HomeController extends GetxController {
         if (status == DirectionsStatus.ok &&
             response.routes != null &&
             response.routes!.isNotEmpty) {
-          DirectionsRoute newRoute = response.routes!.first;
-          List<LatLng> newRoutePoints = convertToLatLng(
-              newRoute, decodePoly(newRoute.overviewPolyline!.points!));
-
-          // Check every segment of the route for hazardous proximity.
-          bool routeHasHazard = false;
-          for (int i = 0; i < newRoutePoints.length - 1; i++) {
-            double d = distancePointToSegment(
-                hazardLatLng, newRoutePoints[i], newRoutePoints[i + 1]);
-            if (d < hazardSafetyBuffer) {
-              routeHasHazard = true;
-              break;
-            }
-          }
-          if (routeHasHazard) {
-            // Snap the waypoint so it falls on a road.
-            LatLng snappedWaypoint = await snapToRoad(waypoint);
-            final snapRequest = DirectionsRequest(
-              origin: originLocation,
-              destination: destinationLocation,
-              waypoints: [
-                DirectionsWaypoint(
-                    location:
-                        '${snappedWaypoint.latitude},${snappedWaypoint.longitude}')
-              ],
-              alternatives: false,
-              travelMode: isSelectedGoTo.value == 0
-                  ? TravelMode.driving
-                  : TravelMode.walking,
-              unitSystem: UnitSystem.imperial,
-            );
-            directionsService.route(snapRequest, (DirectionsResult snapResponse,
-                DirectionsStatus? snapStatus) async {
-              if (snapStatus == DirectionsStatus.ok &&
-                  snapResponse.routes != null &&
-                  snapResponse.routes!.isNotEmpty) {
-                DirectionsRoute snappedRoute = snapResponse.routes!.first;
-                List<LatLng> snappedRoutePoints = convertToLatLng(snappedRoute,
-                    decodePoly(snappedRoute.overviewPolyline!.points!));
-                // Re-check the snapped route against the hazard.
-                bool snappedRouteHasHazard = false;
-                for (int i = 0; i < snappedRoutePoints.length - 1; i++) {
-                  double d = distancePointToSegment(hazardLatLng,
-                      snappedRoutePoints[i], snappedRoutePoints[i + 1]);
-                  if (d < hazardSafetyBuffer) {
-                    snappedRouteHasHazard = true;
-                    break;
-                  }
-                }
-                // Regardless of a minor violation in snapped route, show it.
-                var snapInfo =
-                    await getDistanceUsingDirections(snappedRoutePoints, mode);
-                completer.complete({
-                  "route": snappedRoute,
-                  "points": snappedRoutePoints,
-                  "info": snapInfo,
-                  "distance": snapInfo?['distance']['value'] ?? double.infinity,
-                });
-              } else {
-                // If snapping fails, show the original route even though it may have a hazard.
-                var info =
-                    await getDistanceUsingDirections(newRoutePoints, mode);
-                completer.complete({
-                  "route": newRoute,
-                  "points": newRoutePoints,
-                  "info": info,
-                  "distance": info?['distance']['value'] ?? double.infinity,
-                });
-              }
-            });
-          }
-          var info = await getDistanceUsingDirections(newRoutePoints, mode);
-          if (info != null &&
-              info['distance'] != null &&
-              info['distance']['value'] != null) {
-            completer.complete({
-              "route": newRoute,
-              "points": newRoutePoints,
-              "info": info,
-              "distance": info['distance']['value'],
-            });
-          } else {
-            completer.complete({
-              "route": newRoute,
-              "points": newRoutePoints,
-              "info": {},
-              "distance": double.infinity,
-            });
-          }
+          completer.complete(response.routes!.first);
         } else {
           completer.complete(null);
         }
@@ -1815,41 +1730,84 @@ class HomeController extends GetxController {
       return completer.future;
     }
 
-    // Try three candidate waypoints concurrently.
-    var results = await Future.wait([
-      getRouteForWaypoint(waypointLeft),
-      getRouteForWaypoint(waypointRight),
-      getRouteForWaypoint(waypointBack),
-    ]);
-
-    // Use whichever candidate yields a valid route.
-    var validResults = results.where((res) => res != null).toList();
-    if (validResults.isEmpty) {
-      // As fallback, try using the left waypoint even if not ideal.
-      var fallback = await getRouteForWaypoint(waypointLeft);
-      if (fallback == null) return;
-      validResults.add(fallback);
+    // Fetch routes for all three candidate waypoints concurrently.
+    List<Future<DirectionsRoute?>> futures = [
+      fetchRouteForWaypoint(behindWaypoint),
+      fetchRouteForWaypoint(leftWaypoint),
+      fetchRouteForWaypoint(rightWaypoint),
+    ];
+    List<DirectionsRoute?> routes = await Future.wait(futures);
+    routes = routes.where((route) => route != null).toList();
+    if (routes.isEmpty) {
+      EasyLoading.showToast("Failed to compute safe routes");
+      return;
     }
-    validResults.sort((a, b) => a!["distance"].compareTo(b!["distance"]));
-    var bestResult = validResults.first!;
 
-    // Update selected route.
+    // Filter out any route whose polyline comes too close to the hazard.
+    const double hazardThreshold = 0.06; // ~60 meters threshold
+    List<DirectionsRoute> safeRoutes = [];
+    for (var route in routes) {
+      List points = decodePoly(route!.overviewPolyline!.points!);
+      List<LatLng> routePoints = convertToLatLng(route, points);
+      bool routeContainsHazard = routePoints.any((point) {
+        return calculateDistance(point, hazardLatLng) < hazardThreshold;
+      });
+      if (!routeContainsHazard) {
+        safeRoutes.add(route);
+      }
+    }
+    if (safeRoutes.isEmpty) {
+      EasyLoading.showToast(
+          "No safe route found; hazard present on all candidate paths");
+      return;
+    }
+
+    // Select the best route based on minimal start-to-end distance.
+    DirectionsRoute? bestRoute;
+    double bestDistance = double.infinity;
+    for (var route in safeRoutes) {
+      List points = decodePoly(route.overviewPolyline!.points!);
+      List<LatLng> routePoints = convertToLatLng(route, points);
+      double routeDistance =
+          calculateDistance(routePoints.first, routePoints.last);
+      if (routeDistance < bestDistance) {
+        bestDistance = routeDistance;
+        bestRoute = route;
+      }
+    }
+    if (bestRoute == null) {
+      EasyLoading.showToast("No safe route found");
+      return;
+    }
+    List<LatLng> bestRoutePoints = convertToLatLng(
+        bestRoute, decodePoly(bestRoute.overviewPolyline!.points!));
+
+    // Update the selected route and force redirection.
     selectedRoute.value = RouteSummery(
-      route: bestResult["route"],
-      hazardPoint: {}, // Safe route assumed to have no hazards.
-      minDist: bestResult["points"].length,
-      path: bestResult["points"],
+      route: bestRoute,
+      hazardPoint: {}, // The safe route is assumed to have no hazards.
+      minDist: bestRoutePoints.length,
+      path: bestRoutePoints.cast<LatLng>(),
     );
     updateRoutePolylines();
 
-    // Update displayed distance, time, and instruction info.
-    polylineInfo[PolylineId('polyline:0')] = bestResult["info"];
-    selectedPolylineInfo.value = {
-      "Distance": "${bestResult["info"]['distance']['text']}",
-      "Time": "${bestResult["info"]['duration']['text']}",
-      "Instructions": bestResult["info"]['steps']
-    };
-    _showDistanceTimeInfo(PolylineId('polyline:0'));
+    // Force a re-center of the camera to the new route.
+    recenterCamera();
+
+    // Update distance/time information for the new route.
+    String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
+    var info =
+        await getDistanceUsingDirections(bestRoutePoints.cast<LatLng>(), mode);
+    if (info != null) {
+      PolylineId polyId = PolylineId('polyline:0');
+      polylineInfo[polyId] = info;
+      selectedPolylineInfo.value = {
+        "Distance": "${info['distance']['text']}",
+        "Time": "${info['duration']['text']}",
+        "Instructions": info['steps']
+      };
+      _showDistanceTimeInfo(polyId);
+    }
   }
 
   _showHazardDialogAndAddCoin(data) {
