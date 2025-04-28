@@ -380,7 +380,7 @@ class HomeController extends GetxController {
       patterns: isSelectedGoTo.value == 0
           ? []
           : [PatternItem.dot, PatternItem.gap(10)],
-      zIndex: index,
+      zIndex: isSelected ? 1000 : index,
       color: polyColor,
       onTap: () async {
         if (!isJourneyStarted.value) {
@@ -596,7 +596,7 @@ class HomeController extends GetxController {
       patterns: isSelectedGoTo.value == 0
           ? []
           : [PatternItem.dot, PatternItem.gap(10)],
-      zIndex: index,
+      zIndex: isSelected ? 1000 : index,
       color: polyColor,
       onTap: () {
         // If journey is not started, allow tapping to change the selected route.
@@ -646,11 +646,10 @@ class HomeController extends GetxController {
   }
 
   void updateMarkersForRoute(List<LatLng> routePoints) {
-    // Remove previous hazard and crossing markers.
+    // Remove all markers except the destination marker.
     markers.removeWhere((markerId, marker) =>
-        marker.infoWindow.title == "Pedestrian Crossing Along Route" ||
-        (marker.infoWindow.title != null &&
-            marker.infoWindow.title!.toLowerCase().contains("hazard")));
+        marker.infoWindow.title != null &&
+        marker.infoWindow.title != "Destination");
 
     // Update hazard markers from the document list if available.
     Map<String, dynamic> updatedHazardPoints = {};
@@ -1638,13 +1637,14 @@ class HomeController extends GetxController {
   }
 
   void redirectToSafeRoute() async {
+    // Ensure that destination is set.
     if (destLatLng.value == null) {
       EasyLoading.showToast("Destination not available");
       return;
     }
 
-    // Determine origin location.
-    String originLocation;
+    // Use current location if pickUpLatLng is null.
+    String originLocation = "";
     if (pickUpLatLng.value == null) {
       if (appController.currentPosition.value == null) {
         EasyLoading.showToast("Current location not available");
@@ -1656,8 +1656,10 @@ class HomeController extends GetxController {
       originLocation =
           '${pickUpLatLng.value!.latitude},${pickUpLatLng.value!.longitude}';
     }
+    String destinationLocation =
+        '${destLatLng.value!.latitude},${destLatLng.value!.longitude}';
 
-    // Ensure hazard info is available.
+    // Ensure we have hazard info available.
     if (hInfoPoint.value == null) {
       EasyLoading.showToast("No hazard info available");
       return;
@@ -1672,142 +1674,144 @@ class HomeController extends GetxController {
     final GeoPoint hazardGeo = hazardData['position']['geopoint'];
     LatLng hazardLatLng = LatLng(hazardGeo.latitude, hazardGeo.longitude);
 
-    // Calculate a normalized vector from the hazard to the destination.
-    LatLng dest = destLatLng.value!;
-    double dLat = dest.latitude - hazardLatLng.latitude;
-    double dLng = dest.longitude - hazardLatLng.longitude;
-    double length = sqrt(dLat * dLat + dLng * dLng);
-    if (length == 0) {
-      EasyLoading.showToast("Invalid hazard-to-destination vector");
-      return;
+    // Define three candidate waypoints relative to the hazard:
+    // left: shift west; right: shift east; back: shift south.
+    const double offset = 0.005; // roughly a few hundred meters offset
+    LatLng waypointLeft =
+        LatLng(hazardLatLng.latitude, hazardLatLng.longitude - offset);
+    LatLng waypointRight =
+        LatLng(hazardLatLng.latitude, hazardLatLng.longitude + offset);
+    LatLng waypointBack =
+        LatLng(hazardLatLng.latitude - offset, hazardLatLng.longitude);
+
+    String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
+    const double hazardSafetyBuffer =
+        0.05; // segments within ~50 meters are not allowed
+
+    // Helper: Snap a waypoint to a road (dummy implementation; replace with an API call if available).
+    Future<LatLng> snapToRoad(LatLng point) async {
+      return point;
     }
-    double nLat = dLat / length;
-    double nLng = dLng / length;
 
-    // Offset value (in km) to create candidate waypoints (about a few hundred meters).
-    const double offset = 0.005;
+    // Helper: Get a route for a candidate waypoint while enforcing that none of its segments
+    // come closer than hazardSafetyBuffer to the hazard point.
+    Future<Map<String, dynamic>?> getRouteForWaypoint(
+        LatLng initialWaypoint) async {
+      const int maxAttempts = 5;
+      const double hazardSafetyBuffer = 0.05; // ~50 meters
+      // Use the provided waypoint as the starting candidate.
+      LatLng candidate = initialWaypoint;
+      int attempt = 0;
 
-    // Calculate three candidate waypoints around the hazard.
-    LatLng behindWaypoint = LatLng(
-      hazardLatLng.latitude - nLat * offset,
-      hazardLatLng.longitude - nLng * offset,
-    );
-    LatLng leftWaypoint = LatLng(
-      hazardLatLng.latitude + nLng * offset,
-      hazardLatLng.longitude - nLat * offset,
-    );
-    LatLng rightWaypoint = LatLng(
-      hazardLatLng.latitude - nLng * offset,
-      hazardLatLng.longitude + nLat * offset,
-    );
+      Future<Map<String, dynamic>?> tryRoute(LatLng waypoint) async {
+        Completer<Map<String, dynamic>?> completer = Completer();
+        final request = DirectionsRequest(
+          origin: originLocation,
+          destination: destinationLocation,
+          waypoints: [
+            DirectionsWaypoint(
+                location: '${waypoint.latitude},${waypoint.longitude}')
+          ],
+          alternatives: false,
+          travelMode: isSelectedGoTo.value == 0
+              ? TravelMode.driving
+              : TravelMode.walking,
+          unitSystem: UnitSystem.imperial,
+        );
+        directionsService.route(request,
+            (DirectionsResult response, DirectionsStatus? status) async {
+          if (status == DirectionsStatus.ok &&
+              response.routes != null &&
+              response.routes!.isNotEmpty) {
+            DirectionsRoute route = response.routes!.first;
+            List<LatLng> routePoints = convertToLatLng(
+                route, decodePoly(route.overviewPolyline!.points!));
+            var info = await getDistanceUsingDirections(
+                routePoints, isSelectedGoTo.value == 0 ? 'driving' : 'walking');
+            completer.complete({
+              "route": route,
+              "points": routePoints,
+              "info": info,
+              "distance": info?['distance']['value'] ?? double.infinity,
+            });
+          } else {
+            completer.complete(null);
+          }
+        });
+        return completer.future;
+      }
 
-    // Helper function: fetch a route for a given waypoint.
-    Future<DirectionsRoute?> fetchRouteForWaypoint(LatLng waypoint) {
-      final completer = Completer<DirectionsRoute?>();
-      final request = DirectionsRequest(
-        origin: originLocation,
-        destination: '${dest.latitude},${dest.longitude}',
-        waypoints: [
-          DirectionsWaypoint(
-            location: '${waypoint.latitude},${waypoint.longitude}',
-          )
-        ],
-        alternatives: false,
-        travelMode:
-            isSelectedGoTo.value == 0 ? TravelMode.driving : TravelMode.walking,
-        unitSystem: UnitSystem.imperial,
-      );
-      directionsService.route(request,
-          (DirectionsResult response, DirectionsStatus? status) async {
-        if (status == DirectionsStatus.ok &&
-            response.routes != null &&
-            response.routes!.isNotEmpty) {
-          completer.complete(response.routes!.first);
-        } else {
-          completer.complete(null);
+      // Check if a given route is safe (i.e. no segment is closer than the buffer to the hazard).
+      bool isRouteSafe(List<LatLng> points) {
+        for (int i = 0; i < points.length - 1; i++) {
+          double d =
+              distancePointToSegment(hazardLatLng, points[i], points[i + 1]);
+          if (d < hazardSafetyBuffer) {
+            return false;
+          }
         }
-      });
-      return completer.future;
-    }
-
-    // Fetch routes for all three candidate waypoints concurrently.
-    List<Future<DirectionsRoute?>> futures = [
-      fetchRouteForWaypoint(behindWaypoint),
-      fetchRouteForWaypoint(leftWaypoint),
-      fetchRouteForWaypoint(rightWaypoint),
-    ];
-    List<DirectionsRoute?> routes = await Future.wait(futures);
-    routes = routes.where((route) => route != null).toList();
-    if (routes.isEmpty) {
-      EasyLoading.showToast("Failed to compute safe routes");
-      return;
-    }
-
-    // Filter out any route whose polyline comes too close to the hazard.
-    const double hazardThreshold = 0.06; // ~60 meters threshold
-    List<DirectionsRoute> safeRoutes = [];
-    for (var route in routes) {
-      List points = decodePoly(route!.overviewPolyline!.points!);
-      List<LatLng> routePoints = convertToLatLng(route, points);
-      bool routeContainsHazard = routePoints.any((point) {
-        return calculateDistance(point, hazardLatLng) < hazardThreshold;
-      });
-      if (!routeContainsHazard) {
-        safeRoutes.add(route);
+        return true;
       }
-    }
-    if (safeRoutes.isEmpty) {
-      EasyLoading.showToast(
-          "No safe route found; hazard present on all candidate paths");
-      return;
-    }
 
-    // Select the best route based on minimal start-to-end distance.
-    DirectionsRoute? bestRoute;
-    double bestDistance = double.infinity;
-    for (var route in safeRoutes) {
-      List points = decodePoly(route.overviewPolyline!.points!);
-      List<LatLng> routePoints = convertToLatLng(route, points);
-      double routeDistance =
-          calculateDistance(routePoints.first, routePoints.last);
-      if (routeDistance < bestDistance) {
-        bestDistance = routeDistance;
-        bestRoute = route;
+      Map<String, dynamic>? result;
+      // Iteratively try to get a safe route.
+      while (attempt < maxAttempts) {
+        result = await tryRoute(candidate);
+        if (result == null) break; // no route found
+        List<LatLng> points = result["points"];
+        if (isRouteSafe(points)) {
+          return result; // safe route found!
+        }
+        // Otherwise, adjust candidate further away from the hazard.
+        double dLat = candidate.latitude - hazardLatLng.latitude;
+        double dLon = candidate.longitude - hazardLatLng.longitude;
+        double currentDist = sqrt(dLat * dLat + dLon * dLon);
+        // Increase offset factor further each attempt.
+        double factor = 1.5 + attempt * 0.5;
+        candidate = LatLng(
+          hazardLatLng.latitude + dLat * factor,
+          hazardLatLng.longitude + dLon * factor,
+        );
+        attempt++;
       }
+      // After maxAttempts, force return the last computed route.
+      return result;
     }
-    if (bestRoute == null) {
-      EasyLoading.showToast("No safe route found");
-      return;
-    }
-    List<LatLng> bestRoutePoints = convertToLatLng(
-        bestRoute, decodePoly(bestRoute.overviewPolyline!.points!));
 
-    // Update the selected route and force redirection.
+    print("originLocation: $originLocation");
+    // Try three candidate waypoints concurrently.
+    var results = await Future.wait([
+      getRouteForWaypoint(waypointLeft),
+      getRouteForWaypoint(waypointRight),
+      getRouteForWaypoint(waypointBack),
+    ]);
+
+    // Use whichever candidate yields a valid safe route.
+    var validResults = results.where((res) => res != null).toList();
+    if (validResults.isEmpty) {
+      // As a final fallback, force using the left candidate.
+      var fallback = await getRouteForWaypoint(waypointLeft);
+      if (fallback == null) return;
+      validResults.add(fallback);
+    }
+    validResults.sort((a, b) => a!["distance"].compareTo(b!["distance"]));
+    var bestResult = validResults.first!;
+
+    // Update the selected route and UI.
     selectedRoute.value = RouteSummery(
-      route: bestRoute,
-      hazardPoint: {}, // The safe route is assumed to have no hazards.
-      minDist: bestRoutePoints.length,
-      path: bestRoutePoints.cast<LatLng>(),
+      route: bestResult["route"],
+      hazardPoint: {}, // Safe route (hazard removed).
+      minDist: bestResult["points"].length,
+      path: bestResult["points"],
     );
     updateRoutePolylines();
-
-    // Force a re-center of the camera to the new route.
-    recenterCamera();
-
-    // Update distance/time information for the new route.
-    String mode = isSelectedGoTo.value == 0 ? 'driving' : 'walking';
-    var info =
-        await getDistanceUsingDirections(bestRoutePoints.cast<LatLng>(), mode);
-    if (info != null) {
-      PolylineId polyId = PolylineId('polyline:0');
-      polylineInfo[polyId] = info;
-      selectedPolylineInfo.value = {
-        "Distance": "${info['distance']['text']}",
-        "Time": "${info['duration']['text']}",
-        "Instructions": info['steps']
-      };
-      _showDistanceTimeInfo(polyId);
-    }
+    polylineInfo[PolylineId('polyline:0')] = bestResult["info"];
+    selectedPolylineInfo.value = {
+      "Distance": "${bestResult["info"]['distance']['text']}",
+      "Time": "${bestResult["info"]['duration']['text']}",
+      "Instructions": bestResult["info"]['steps']
+    };
+    _showDistanceTimeInfo(PolylineId('polyline:0'));
   }
 
   _showHazardDialogAndAddCoin(data) {
@@ -1982,7 +1986,7 @@ class HomeController extends GetxController {
         // (Optionally, you might mark all crossings here if needed.)
       } else {
         print(
-            "Error from Overpass API: ${response.statusCode} ${response.reasonPhrase}");
+            "Error from OverpassAPI: ${response.statusCode} ${response.reasonPhrase}");
       }
     } catch (e) {
       print("Exception during Overpass API call: $e");
@@ -2068,40 +2072,49 @@ class HomeController extends GetxController {
       return;
     }
 
-    // Auto-populate the "from" and "to" fields.
     isSelectedGoTo.value = mode;
     pickUpLatLng.value = journeyPoints.first;
     destLatLng.value = journeyPoints.last;
-    String originAddress = origin.trim();
-    if (originAddress.isEmpty) {
-      originAddress = await getAddressFromLatLng(journeyPoints.first);
-    }
+    pickupController.text = origin.trim().isEmpty
+        ? await getAddressFromLatLng(journeyPoints.first)
+        : origin.trim();
+    dropController.text = destination.trim().isEmpty
+        ? await getAddressFromLatLng(journeyPoints.last)
+        : destination.trim();
 
-    // If destination (drop) is empty, use last point from journeyPoints and reverse geocode.
-    String destinationAddress = destination.trim();
-    if (destinationAddress.isEmpty) {
-      destinationAddress = await getAddressFromLatLng(journeyPoints.last);
-    }
-    pickupController.text = originAddress;
-    dropController.text = destinationAddress;
-
-    // Clear previous polyline(s) then display the route.
+    // Clear previous data
+    listRouteSummery.clear();
     ployLines.clear();
+
+    // Use an existing DirectionsRoute (e.g. first from the last API call)
+    final DirectionsRoute apiRoute = directionResponse.value!.routes!.first;
+
+    // Create a new RouteSummery with that route and the recorded points
+    final historyRoute = RouteSummery(
+      route: apiRoute,
+      hazardPoint: {},
+      minDist: journeyPoints.length,
+      path: journeyPoints,
+    );
+    listRouteSummery.add(historyRoute);
+    selectedRoute.value = historyRoute;
+
+    // Draw and select the recorded journey
     String movingMode = mode == 0 ? 'driving' : 'walking';
-    addPolyLines(journeyPoints, 0, movingMode: movingMode);
-    // Fetch and update distance, duration, and step instructions.
-    var distanceTimeInfo =
-        await getDistanceUsingDirections(journeyPoints, movingMode);
-    if (distanceTimeInfo != null) {
-      PolylineId polylineId = PolylineId('polyline:0');
-      polylineInfo[polylineId] = distanceTimeInfo;
+    addPolyLines(journeyPoints, 0, movingMode: movingMode, isSelected: true);
+    updateRoutePolylines();
+
+    // Fetch and display distance/time/instructions
+    var info = await getDistanceUsingDirections(journeyPoints, movingMode);
+    if (info != null) {
+      final id = PolylineId('polyline:0');
+      polylineInfo[id] = info;
+      selectedPolylineInfo.clear();
       selectedPolylineInfo.addAll({
-        "Distance": "${distanceTimeInfo['distance']['text']}",
-        "Time": "${distanceTimeInfo['duration']['text']}",
-        "Instructions": distanceTimeInfo['steps']
+        "Distance": "${info['distance']['text']}",
+        "Time": "${info['duration']['text']}",
+        "Instructions": info['steps']
       });
-      print(
-          "Updated instructions: ${selectedPolylineInfo.value['Instructions']}");
     }
   }
 
