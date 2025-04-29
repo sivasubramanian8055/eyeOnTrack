@@ -1637,8 +1637,10 @@ class HomeController extends GetxController {
   }
 
   void redirectToSafeRoute() async {
+    EasyLoading.show(status: 'Computing safe route...');
     // Ensure that destination is set.
     if (destLatLng.value == null) {
+      EasyLoading.dismiss();
       EasyLoading.showToast("Destination not available");
       return;
     }
@@ -1647,6 +1649,7 @@ class HomeController extends GetxController {
     String originLocation = "";
     if (pickUpLatLng.value == null) {
       if (appController.currentPosition.value == null) {
+        EasyLoading.dismiss();
         EasyLoading.showToast("Current location not available");
         return;
       }
@@ -1796,7 +1799,6 @@ class HomeController extends GetxController {
     }
     validResults.sort((a, b) => a!["distance"].compareTo(b!["distance"]));
     var bestResult = validResults.first!;
-
     // Update the selected route and UI.
     selectedRoute.value = RouteSummery(
       route: bestResult["route"],
@@ -1812,6 +1814,7 @@ class HomeController extends GetxController {
       "Instructions": bestResult["info"]['steps']
     };
     _showDistanceTimeInfo(PolylineId('polyline:0'));
+    EasyLoading.dismiss();
   }
 
   _showHazardDialogAndAddCoin(data) {

@@ -267,6 +267,7 @@ class JourneyHistoryView extends StatelessWidget {
                             children: [
                               OutlinedButton(
                                 onPressed: () async {
+                                  Get.back();
                                   // Retrieve the recorded journey from the document (assumed stored as a list of maps containing lat/lng).
                                   List<dynamic> recordedJourneyData =
                                       data['recordedJourney'] ?? [];
@@ -301,7 +302,6 @@ class JourneyHistoryView extends StatelessWidget {
                                   );
 
                                   // Close the Journey History view.
-                                  Get.back();
                                 },
                                 child: const Text("View on Map"),
                               ),
