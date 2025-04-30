@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "742173059472",
-    "project_id": "navigate-ff149",
-    "storage_bucket": "navigate-ff149.firebasestorage.app"
+    "project_number": "582709179373",
+    "project_id": "eyes-on-track",
+    "storage_bucket": "eyes-on-track.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:742173059472:android:985c4e3044715f21f6ab15",
+        "mobilesdk_app_id": "1:582709179373:android:b7d11b0f859d4b931f2de4",
         "android_client_info": {
           "package_name": "com.lgt.your.locator"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCe3Pa4Q-lB1LKRwK84S9vPN487D4tp8uk"
+          "current_key": "AIzaSyB0R1BB1AyVHg5U_tPnzcdheXSGaEDHFSw"
         }
       ],
       "services": {
