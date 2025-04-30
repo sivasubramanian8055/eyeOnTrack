@@ -10,7 +10,7 @@ class SearchPlaceEx extends StatefulWidget {
 }
 
 class _SearchPlaceExState extends State<SearchPlaceEx> {
-  String _apiKey = 'AIzaSyCy6TbAdJKairdnqz6Wvh3qcv1rypGW-Wo';
+  String _apiKey = 'AIzaSyAVx5ce04uq-jebP2t5q7qBQXkw8vYhZQw';
   var uuid = Uuid();
   String _sessionToken = '1234';
   @override

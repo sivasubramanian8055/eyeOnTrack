@@ -50,11 +50,11 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyCe3Pa4Q-lB1LKRwK84S9vPN487D4tp8uk',
-    appId: '1:742173059472:android:985c4e3044715f21f6ab15',
-    messagingSenderId: '742173059472',
-    projectId: 'navigate-ff149',
-    storageBucket: 'navigate-ff149.firebasestorage.app',
+    apiKey: 'AIzaSyB0R1BB1AyVHg5U_tPnzcdheXSGaEDHFSw',
+    appId: '1:582709179373:android:b7d11b0f859d4b931f2de4',
+    messagingSenderId: '582709179373',
+    projectId: 'eyes-on-track',
+    storageBucket: 'eyes-on-track.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(

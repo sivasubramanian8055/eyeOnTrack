@@ -147,6 +147,14 @@ class HomeController extends GetxController {
     }
   }
 
+  void updateUserPreferences({
+    required bool checkAwarenessValue,
+    required bool notifyRewardsValue,
+  }) {
+    checkAwareness.value = checkAwarenessValue;
+    notifyRewards.value = notifyRewardsValue;
+  }
+
   @override
   void onInit() {
     super.onInit();
@@ -200,7 +208,7 @@ class HomeController extends GetxController {
           }
         });
 
-        const double deviationThreshold = 0.10; // in meters
+        const double deviationThreshold = 0.03; // in meters
 
         if (minVal > deviationThreshold) {
           print("in");
@@ -239,11 +247,10 @@ class HomeController extends GetxController {
 
                 // Add the new route polyline to the map
                 addPolyLines(newRoutePoints, 0,
+                    isSelected: true,
                     movingMode:
                         isSelectedGoTo.value == 0 ? 'driving' : 'walking');
-                if (isSelectedGoTo.value != 0) {
-                  extractCrossingsAlongRoute();
-                }
+                updateMarkersForRoute(newRoutePoints);
                 // Recalculate and update distance, time, and step instructions
                 var distanceTimeInfo = await getDistanceUsingDirections(
                   newRoutePoints,
@@ -256,6 +263,7 @@ class HomeController extends GetxController {
                     "Time": "${distanceTimeInfo['duration']['text']}",
                     "Instructions": distanceTimeInfo['steps']
                   });
+
                   print(
                       "UPDATED_POLYLINE_INFO => ${selectedPolylineInfo.value}");
                 }
@@ -520,7 +528,7 @@ class HomeController extends GetxController {
   TextEditingController pickupController = TextEditingController();
   TextEditingController dropController = TextEditingController();
   AppController appController = Get.find<AppController>();
-  final apiKey = 'AIzaSyCy6TbAdJKairdnqz6Wvh3qcv1rypGW-Wo';
+  final apiKey = 'AIzaSyAVx5ce04uq-jebP2t5q7qBQXkw8vYhZQw';
   final scaffoldKey = GlobalKey<ScaffoldState>();
   final Completer<GoogleMapController> mapController =
       Completer<GoogleMapController>();
@@ -649,7 +657,7 @@ class HomeController extends GetxController {
     // Remove all markers except the destination marker.
     markers.removeWhere((markerId, marker) =>
         marker.infoWindow.title != null &&
-        marker.infoWindow.title != "Destination");
+        marker.infoWindow.title != dropController.text.split(',').first);
 
     // Update hazard markers from the document list if available.
     Map<String, dynamic> updatedHazardPoints = {};
@@ -697,18 +705,37 @@ class HomeController extends GetxController {
     int reward = 0;
     String rewardMessage = "";
     if (lookedLeft && lookedRight) {
+      successfulAwarenessChecks.value++;
       reward = 10;
       rewardMessage = "Reward Earned: 10 points (looked both left and right)";
-    } else if (lookedLeft) {
+    } else if (lookedLeft || lookedRight) {
+      partialAwarenessChecks.value++;
       reward = 5;
-      rewardMessage = "Reward Earned: 5 points (Left only)";
-    } else if (lookedRight) {
-      reward = 5;
-      rewardMessage = "Reward Earned: 5 points (Right only)";
+      rewardMessage = lookedLeft
+          ? "Reward Earned: 5 points (Left only)"
+          : "Reward Earned: 5 points (Right only)";
     } else {
+      failedAwarenessChecks.value++;
       rewardMessage = "No reward earned";
     }
-    totalRewardsEarned.value += reward;
+
+    // Only update rewards and trigger dashboard if reward was earned
+    if (reward > 0) {
+      totalRewardsEarned.value += reward;
+      String currentLocality = await getCurrentLocality();
+      // Create reward data
+      Map<String, dynamic> rewardData = {
+        'message': 'Pedestrian Crossing Check',
+        'locality': currentLocality,
+        'rewardAmount': reward,
+        'totalRewardsEarned': totalRewardsEarned.value
+      };
+
+      // Add to dashboard only if reward was earned
+      if (userLoginModel?.loginType.toString() == 'auth') {
+        await addDashboardReword(rewardData);
+      }
+    }
 
     // If notifyRewards is true, show a push notification instead of dialogs.
     if (notifyRewards.value) {
@@ -766,6 +793,25 @@ class HomeController extends GetxController {
       message,
       platformChannelSpecifics,
     );
+  }
+
+  Future<String> getCurrentLocality() async {
+    try {
+      LatLng currentPosition = LatLng(
+          appController.currentPosition.value?.latitude ?? 0.0,
+          appController.currentPosition.value?.longitude ?? 0.0);
+      final loc.LocatitonGeocoder geocoder = loc.LocatitonGeocoder(apiKey);
+      List<loc.Address> addresses = await geocoder.findAddressesFromCoordinates(
+          loc.Coordinates(currentPosition.latitude, currentPosition.longitude));
+
+      if (addresses.isNotEmpty) {
+        return addresses.first.addressLine ?? 'Unknown location';
+      }
+      return 'Unknown location';
+    } catch (e) {
+      print("Error getting locality: $e");
+      return 'Unknown location';
+    }
   }
 
   void _showDistanceTimeInfo(PolylineId polylineId) {
@@ -847,7 +893,7 @@ class HomeController extends GetxController {
         _updatePath(documentList);
         this.documentList = documentList;
         initDirectionService();
-        Timer(const Duration(seconds: 10), () => isInitDirectionEnable = true);
+        Timer(const Duration(seconds: 6), () => isInitDirectionEnable = true);
         EasyLoading.dismiss();
         isMapInitialized.value = true;
       },
@@ -1122,7 +1168,7 @@ class HomeController extends GetxController {
     _updateDestinationInfo();
     // Only when in walking mode
     if (isSelectedGoTo.value != 0) {
-      const double cameraActivationThreshold = 0.02; // e.g. 30 meters
+      const double cameraActivationThreshold = 0.015; // e.g. 30 meters
       LatLng currentPos = LatLng(
           appController.currentPosition.value?.latitude ?? 0.0,
           appController.currentPosition.value?.longitude ?? 0.0);
@@ -1625,11 +1671,29 @@ class HomeController extends GetxController {
       'position': geo.data,
       'for_saftey_msm': _getSeftyMessage(type)
     }).then(
-      (value) {
+      (value) async {
         _addMarkerOnMap(
             LatLng(position.latitude ?? 0.0, position.longitude ?? 0.0),
             type,
             '');
+        if (userLoginModel?.loginType.toString() == 'auth') {
+          // Create reward data
+          Map<String, dynamic> rewardData = {
+            'message': 'Obstacle Reported: ${_getObstacleMessage(type)}',
+            'locality': addresses.first.addressLine,
+            'rewardAmount': 5,
+            'totalRewardsEarned': totalRewardsEarned.value + 5
+          };
+
+          totalRewardsEarned.value += 5;
+          await addDashboardReword(rewardData);
+
+          // Show reward notification if enabled
+          if (notifyRewards.value) {
+            await _showRewardNotification(
+                "Reward Earned: 5 points (Obstacle Reported)");
+          }
+        }
         Get.back();
         EasyLoading.showToast(addresses.first.addressLine.toString());
       },
@@ -1814,6 +1878,24 @@ class HomeController extends GetxController {
       "Instructions": bestResult["info"]['steps']
     };
     _showDistanceTimeInfo(PolylineId('polyline:0'));
+    if (userLoginModel?.loginType.toString() == 'auth') {
+      String currentLocality = await getCurrentLocality();
+      Map<String, dynamic> rewardData = {
+        'message': 'Safe Route Selected',
+        'locality': currentLocality,
+        'rewardAmount': 5,
+        'totalRewardsEarned': totalRewardsEarned.value + 5
+      };
+
+      totalRewardsEarned.value += 5;
+      await addDashboardReword(rewardData);
+
+      // Show reward notification
+      if (notifyRewards.value) {
+        await _showRewardNotification(
+            "Reward Earned: 5 points (Safe Route Selected)");
+      }
+    }
     EasyLoading.dismiss();
   }
 
@@ -1849,7 +1931,6 @@ class HomeController extends GetxController {
       //   });
       // }
       // for all type hazard dash bord coins
-      addDashboardReword(data);
     } else {
       List<Map<String, dynamic>> newHazards = [];
       if (hazardListHistory.isEmpty) {
@@ -1907,7 +1988,7 @@ class HomeController extends GetxController {
       "title": data['message'],
       "locality": data['locality'],
       "time": DateTime.now().toLocal().toString(),
-      "coin": 5,
+      "coin": data['rewardAmount'] ?? 5,
     };
     await firestore
         .collection('users')

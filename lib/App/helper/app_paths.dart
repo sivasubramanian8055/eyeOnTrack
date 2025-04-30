@@ -21,7 +21,7 @@ class NavigationService {
   static GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 }
 
-const apiKey = 'AIzaSyCy6TbAdJKairdnqz6Wvh3qcv1rypGW-Wo';
+const apiKey = 'AIzaSyAVx5ce04uq-jebP2t5q7qBQXkw8vYhZQw';
 LatLng startLatLong = const LatLng(44.63747499999999,
     -63.5872374); //6050 University Ave, Halifax, NS B3H 1W5, Canada
 LatLng endLatLong = const LatLng(
@@ -396,7 +396,7 @@ ElevatedButton myButton(
   );
 }
 
-String _key = 'AIzaSyCy6TbAdJKairdnqz6Wvh3qcv1rypGW-Wo';
+String _key = 'AIzaSyAVx5ce04uq-jebP2t5q7qBQXkw8vYhZQw';
 
 InputDecoration placeInputDecoration(
         {required String hintText, Color? hintTextColor}) =>

@@ -4,7 +4,7 @@ import 'package:crypoexchange/App/helper/app_paths.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:intl/intl.dart';
-
+import '../modules/controllers/home_controller.dart';
 import '../routes/app_pages.dart';
 
 class ProfileDialog extends StatefulWidget {
@@ -62,6 +62,10 @@ class _ProfileDialogState extends State<ProfileDialog> {
           'notifyRewards': notifyRewards,
         }
       });
+      Get.find<HomeController>().updateUserPreferences(
+        checkAwarenessValue: checkAwareness,
+        notifyRewardsValue: notifyRewards,
+      );
     } catch (e) {
       debugPrint("Error updating preferences: $e");
     }
@@ -179,6 +183,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
                         color: Colors.black,
                       ),
                       value: checkAwareness,
+                      activeColor: Colors.blue,
                       onChanged: (value) {
                         setState(() {
                           checkAwareness = value;
@@ -194,6 +199,7 @@ class _ProfileDialogState extends State<ProfileDialog> {
                         color: Colors.black,
                       ),
                       value: notifyRewards,
+                      activeColor: Colors.blue,
                       onChanged: (value) {
                         setState(() {
                           notifyRewards = value;

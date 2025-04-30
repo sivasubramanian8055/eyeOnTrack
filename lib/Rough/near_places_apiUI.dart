@@ -18,7 +18,7 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   AppController appController = Get.find<AppController>();
 
-  final String _apiKey = 'AIzaSyCy6TbAdJKairdnqz6Wvh3qcv1rypGW-Wo';
+  final String _apiKey = 'AIzaSyAVx5ce04uq-jebP2t5q7qBQXkw8vYhZQw';
   final Set<Marker> _markers = {};
   late GoogleMapController _mapController;
   List<dynamic> _places = [];

@@ -669,8 +669,11 @@ class HomeView extends GetView<HomeController> {
                             ),
                             if (controller.isSelectedGoTo.value == 1)
                               Obx(() {
-                                int stepsTaken = controller.stepCount.value -
-                                    controller.journeyStartStepCount;
+                                int stepsTaken =
+                                    controller.isJourneyStarted.value
+                                        ? controller.stepCount.value -
+                                            controller.journeyStartStepCount
+                                        : 0;
                                 return Padding(
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 10.0, vertical: 8.0),

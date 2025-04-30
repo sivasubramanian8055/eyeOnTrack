@@ -408,7 +408,7 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
   void _startRewardTimer() {
     debugPrint("Starting reward timer.");
     _rewardTimer?.cancel();
-    _rewardTimer = Timer(const Duration(seconds: 10), () {
+    _rewardTimer = Timer(const Duration(seconds: 6), () {
       debugPrint("Reward timer expired, mounted = $mounted");
       if (mounted && !_rewardTriggered) {
         _triggerReward();
@@ -467,7 +467,8 @@ class _FrontCameraPreviewState extends State<FrontCameraPreview> {
         final base64Image = base64Encode(rotatedJpegBytes);
 
         // 2) POST to your endpoint.
-        final url = Uri.parse("https://persuasive.research.cs.dal.ca/eyesontrack/api");
+        final url =
+            Uri.parse("https://persuasive.research.cs.dal.ca/eyesontrack/api");
 
         // Wrap the post call in a Future and add it to _pendingApiCalls.
         final apiCall = http

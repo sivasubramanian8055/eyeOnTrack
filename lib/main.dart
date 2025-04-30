@@ -25,7 +25,7 @@ void main() async {
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.dark));
-  DirectionsService.init('AIzaSyCy6TbAdJKairdnqz6Wvh3qcv1rypGW-Wo');
+  DirectionsService.init('AIzaSyAVx5ce04uq-jebP2t5q7qBQXkw8vYhZQw');
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
